@@ -1,0 +1,83 @@
+import csv
+from pathlib import Path
+
+OUTPUT_FILE = Path("Datasets/processed/cuad_label_mapping.csv")
+OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+mapping = [
+    ("Parties", "PARTIES", "KEEP"),
+    ("License Grant", "LICENSE_GRANT", "KEEP"),
+    ("Cap On Liability", "LIMITATION_OF_LIABILITY", "MERGE"),
+    ("Anti-Assignment", "ASSIGNMENT_RESTRICTION", "KEEP"),
+    ("Audit Rights", "AUDIT_RIGHTS", "KEEP"),
+    ("Insurance", "INSURANCE", "KEEP"),
+    ("Document Name", "DOCUMENT_METADATA", "DROP"),
+    ("Agreement Date", "DOCUMENT_METADATA", "DROP"),
+    ("Expiration Date", "TERM_AND_EXPIRATION", "MERGE"),
+    ("Governing Law", "GOVERNING_LAW", "KEEP"),
+    ("Post-Termination Services", "POST_TERMINATION", "KEEP"),
+    ("Effective Date", "DOCUMENT_METADATA", "DROP"),
+    ("Minimum Commitment", "MINIMUM_COMMITMENT", "KEEP"),
+    ("Revenue/Profit Sharing", "REVENUE_PROFIT_SHARING", "KEEP"),
+    ("Exclusivity", "EXCLUSIVITY", "KEEP"),
+    ("Rofr/Rofo/Rofn", "RIGHT_OF_FIRST_REFUSAL_OFFER_NEGOTIATION", "KEEP"),
+    ("Ip Ownership Assignment", "IP_OWNERSHIP_ASSIGNMENT", "KEEP"),
+    ("Non-Transferable License", "LICENSE_TRANSFER_RESTRICTION", "KEEP"),
+    ("Non-Compete", "NON_COMPETE", "KEEP"),
+    ("Change Of Control", "CHANGE_OF_CONTROL", "KEEP"),
+    ("Termination For Convenience", "TERMINATION_FOR_CONVENIENCE", "KEEP"),
+    ("Renewal Term", "RENEWAL", "MERGE"),
+    ("Warranty Duration", "WARRANTY", "KEEP"),
+    ("Covenant Not To Sue", "COVENANT_NOT_TO_SUE", "KEEP"),
+    ("Volume Restriction", "VOLUME_RESTRICTION", "KEEP"),
+    ("Uncapped Liability", "LIMITATION_OF_LIABILITY", "MERGE"),
+    ("Irrevocable Or Perpetual License", "PERPETUAL_LICENSE", "KEEP"),
+    ("Competitive Restriction Exception", "COMPETITIVE_RESTRICTION_EXCEPTION", "KEEP"),
+    ("Notice Period To Terminate Renewal", "RENEWAL", "MERGE"),
+    ("Liquidated Damages", "LIQUIDATED_DAMAGES", "KEEP"),
+    ("Joint Ip Ownership", "JOINT_IP_OWNERSHIP", "KEEP"),
+    ("Affiliate License-Licensee", "AFFILIATE_LICENSE", "MERGE"),
+    ("No-Solicit Of Employees", "NON_SOLICIT", "MERGE"),
+    ("Affiliate License-Licensor", "AFFILIATE_LICENSE", "MERGE"),
+    ("Source Code Escrow", "SOURCE_CODE_ESCROW", "KEEP"),
+    ("Non-Disparagement", "NON_DISPARAGEMENT", "KEEP"),
+    ("No-Solicit Of Customers", "NON_SOLICIT", "MERGE"),
+    ("Third Party Beneficiary", "THIRD_PARTY_BENEFICIARY", "KEEP"),
+    ("Most Favored Nation", "MOST_FAVORED_NATION", "KEEP"),
+    ("Unlimited/All-You-Can-Eat-License", "UNLIMITED_LICENSE", "KEEP"),
+    ("Price Restrictions", "PRICE_RESTRICTIONS", "KEEP"),
+]
+
+with open(OUTPUT_FILE, "w", encoding="utf-8", newline="") as f:
+    writer = csv.writer(f)
+    writer.writerow([
+        "cuad_label",
+        "final_label",
+        "action"
+    ])
+
+    for row in mapping:
+        writer.writerow(row)
+
+print("=" * 70)
+print("CUAD LABEL MAPPING CREATED")
+print("=" * 70)
+
+print(f"Original CUAD labels : {len(mapping)}")
+print(f"Saved to             : {OUTPUT_FILE}")
+
+print("\nActions:")
+print(f"  KEEP  : {sum(x[2] == 'KEEP' for x in mapping)}")
+print(f"  MERGE : {sum(x[2] == 'MERGE' for x in mapping)}")
+print(f"  DROP  : {sum(x[2] == 'DROP' for x in mapping)}")
+
+print("\nFinal labels:")
+final_labels = sorted(set(
+    x[1] for x in mapping
+    if x[2] != "DROP"
+))
+
+for i, label in enumerate(final_labels, 1):
+    print(f"{i:2}. {label}")
+
+print(f"\nFinal taxonomy size: {len(final_labels)}")
