@@ -5,36 +5,39 @@ import unicodedata
 def normalize_unicode(text: str) -> str:
     """
     Normalize Unicode characters while preserving legal meaning.
-
-    NFKC helps normalize visually equivalent characters such as
-    full-width characters and compatibility forms.
     """
     return unicodedata.normalize("NFKC", text)
 
 
 def remove_non_content_artifacts(text: str) -> str:
     """
-    Remove common document-extraction artifacts such as page markers
-    and isolated form-feed characters.
+    Remove common document-extraction artifacts while preserving
+    line structure.
 
-    Legal content is intentionally preserved.
+    Artifact lines are replaced with empty lines rather than
+    deleting the line itself.
     """
 
-    # Remove common PDF page-break/form-feed artifacts
+    # Preserve form-feed as a line boundary
     text = text.replace("\f", "\n")
 
-    # Remove common page-number artifacts:
+    # Remove common page-number artifacts while preserving
+    # the newline at the end of the line.
+    #
+    # Examples:
     # Page -2-
     # Page 2
-    # -2-
     text = re.sub(
-        r"(?im)^\s*page\s*[-–—]?\s*\d+\s*[-–—]?\s*$",
+        r"(?im)^[^\S\r\n]*page[^\S\r\n]*[-–—]?[^\S\r\n]*\d+[^\S\r\n]*[-–—]?[^\S\r\n]*(?=\n|$)",
         "",
         text
     )
 
+    # Examples:
+    # -2-
+    # 2
     text = re.sub(
-        r"(?m)^\s*[-–—]\s*\d+\s*[-–—]\s*$",
+        r"(?m)^[^\S\r\n]*[-–—]?[^\S\r\n]*\d+[^\S\r\n]*[-–—]?[^\S\r\n]*(?=\n|$)",
         "",
         text
     )
@@ -47,7 +50,6 @@ def remove_html_xml_tags(text: str) -> str:
     Remove HTML/XML markup while preserving the text contained
     inside the tags.
     """
-
     return re.sub(r"<[^>]+>", "", text)
 
 
@@ -56,25 +58,23 @@ def remove_ocr_garbage(text: str) -> str:
     Remove obvious OCR/extraction garbage without aggressively
     changing legal text.
 
-    This removes:
-    - Unicode replacement characters
-    - zero-width characters
-    - repeated non-text garbage characters
-
-    It intentionally does NOT attempt to correct words or numbers,
-    because OCR correction can change legal meaning.
+    Line structure is preserved.
     """
 
-    # Unicode replacement character often indicates failed decoding/OCR
+    # Unicode replacement character
     text = text.replace("\ufffd", "")
 
-    # Remove zero-width / invisible formatting characters
-    text = re.sub(r"[\u200b\u200c\u200d\ufeff]", "", text)
-
-    # Remove isolated decorative OCR symbols at the beginning/end
-    # of lines while keeping normal punctuation.
+    # Zero-width / invisible formatting characters
     text = re.sub(
-        r"(?m)^\s*[|¦]{2,}\s*$",
+        r"[\u200b\u200c\u200d\ufeff]",
+        "",
+        text
+    )
+
+    # Replace isolated decorative OCR-symbol lines with
+    # empty lines rather than deleting the lines.
+    text = re.sub(
+        r"(?m)^[^\S\r\n]*[|¦]{2,}[^\S\r\n]*(?=\n|$)",
         "",
         text
     )
@@ -85,7 +85,7 @@ def remove_ocr_garbage(text: str) -> str:
 def remove_control_characters(text: str) -> str:
     """
     Remove control characters while preserving meaningful
-    whitespace such as spaces and newlines.
+    whitespace such as spaces, tabs, and newlines.
     """
 
     cleaned = []
@@ -94,7 +94,6 @@ def remove_control_characters(text: str) -> str:
         category = unicodedata.category(char)
 
         if category.startswith("C"):
-            # Keep newline and tab temporarily; tabs are normalized later.
             if char in ("\n", "\t"):
                 cleaned.append(char)
         else:
@@ -105,50 +104,43 @@ def remove_control_characters(text: str) -> str:
 
 def normalize_whitespace(text: str) -> str:
     """
-    Normalize spaces, tabs, line endings, and excessive blank lines.
+    Normalize whitespace while preserving line boundaries.
+
+    The number of lines is intentionally preserved because the
+    clause segmentation stage aligns processed lines with their
+    corresponding original lines.
     """
 
-    # Normalize Windows / old Mac line endings
+    # Normalize line endings
     text = text.replace("\r\n", "\n").replace("\r", "\n")
 
     # Convert tabs to spaces
     text = text.replace("\t", " ")
 
-    # Remove leading/trailing whitespace from each line
+    # Strip whitespace from each line without removing lines
     lines = [line.strip() for line in text.split("\n")]
 
-    # Reconstruct text
-    text = "\n".join(lines)
+    # Collapse multiple spaces inside each line
+    lines = [
+        re.sub(r"[ ]{2,}", " ", line)
+        for line in lines
+    ]
 
-    # Collapse multiple spaces
-    text = re.sub(r"[ ]{2,}", " ", text)
-
-    # Collapse excessive blank lines
-    text = re.sub(r"\n{3,}", "\n\n", text)
-
-    # Remove leading/trailing whitespace from complete text
-    return text.strip()
+    # Reconstruct without removing blank lines
+    return "\n".join(lines)
 
 
 def clean_text(text: str) -> str:
     """
     Clean and normalize extracted document text.
 
-    Processing stages:
-    1. Unicode normalization
-    2. Removal of non-content document artifacts
-    3. HTML/XML tag removal
-    4. Conservative OCR garbage cleanup
-    5. Control-character removal
-    6. Whitespace normalization
-
-    The function is intentionally conservative because the input
+    The preprocessing pipeline is conservative because the input
     is legal contract text. Legal numbers, punctuation, dates,
     currency values, percentages, section numbers, and negations
-    must be preserved.
+    are preserved.
 
-    This function returns processed_text only.
-    original_text is never modified by this function.
+    Line boundaries are preserved so that original_text and
+    processed_text remain aligned for clause segmentation.
     """
 
     if not isinstance(text, str):
@@ -157,13 +149,13 @@ def clean_text(text: str) -> str:
     # 1. Unicode normalization
     text = normalize_unicode(text)
 
-    # 2. Remove non-content artifacts
+    # 2. Remove document artifacts
     text = remove_non_content_artifacts(text)
 
     # 3. Remove HTML/XML tags
     text = remove_html_xml_tags(text)
 
-    # 4. Remove obvious OCR/extraction garbage
+    # 4. Remove obvious OCR garbage
     text = remove_ocr_garbage(text)
 
     # 5. Remove control characters

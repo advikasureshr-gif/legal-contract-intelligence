@@ -20,44 +20,6 @@ It does NOT:
 Public API
 ----------
     segment_contract(document: dict) -> dict
-
-Expected input
---------------
-{
-    "document_name": "contract.pdf",
-    "language": "en",
-    "pages": [
-        {
-            "page": 1,
-            "text": "..."
-        }
-    ]
-}
-
-Output
-------
-{
-    "status": "success",
-    "clauses": [
-        {
-            "clause_id": "1.1",
-            "section": "ESTABLISHMENT OF DISTRIBUTORSHIP",
-            "page": 1,
-            "text": "...",
-            "language": "en"
-        }
-    ]
-}
-
-Design
-------
-1. Structural regex detection
-2. Rule-based candidate validation
-3. Boundary resolution
-4. Clause construction
-
-The implementation deliberately avoids ML so that segmentation remains
-deterministic and explainable.
 """
 
 from __future__ import annotations
@@ -67,7 +29,7 @@ import re
 import sys
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 
 # ============================================================================
@@ -108,34 +70,22 @@ PAGE_MARKER_RE = re.compile(
     re.IGNORECASE,
 )
 
-
 ARTICLE_RE = re.compile(
     r"^ARTICLE\s+"
     r"([IVXLCDM]+|\d+)"
-    r"(?:\s*[\.:\-]\s*)?"
+    r"(?:\s*[.:\-]\s*)?"
     r"(.*)$",
     re.IGNORECASE,
 )
-
 
 SECTION_RE = re.compile(
     r"^SECTION\s+"
     r"([A-Za-z0-9IVXLCDM]+(?:\.[A-Za-z0-9IVXLCDM]+)*)"
-    r"(?:\s*[\.:\-]\s*)?"
+    r"(?:\s*[.:\-]\s*)?"
     r"(.*)$",
     re.IGNORECASE,
 )
 
-
-# Numeric clause candidate.
-#
-# Examples accepted:
-#   1. ESTABLISHMENT
-#   1.1 Grant and Acceptance
-#   2 TERM
-#   5.2 Termination Rights
-#
-# Validation happens later. Regex detection alone does NOT mean boundary.
 NUMERIC_RE = re.compile(
     r"^(\d{1,3}(?:\.\d{1,3}){0,5})"
     r"\.?"
@@ -143,66 +93,39 @@ NUMERIC_RE = re.compile(
     r"(\S.*)$"
 )
 
+STANDALONE_NUMERIC_RE = re.compile(
+    r"^(\d{1,3}(?:\.\d{1,3}){0,5})\.?$"
+)
 
 RECITAL_RE = re.compile(
     r"^([A-Z])\.\s+(\S.*)$"
 )
-
 
 PAREN_RE = re.compile(
     r"^\(([A-Za-z]{1,6}|[ivxlcdmIVXLCDM]{1,8})\)"
     r"\s*(.*)$"
 )
 
-
-# Strong heading candidates.
 ALL_CAPS_HEADING_RE = re.compile(
     r"^[A-Z][A-Z0-9][A-Z0-9\s,&'()/\-:]+$"
 )
 
 
 # ============================================================================
-# Heuristic vocabulary
+# Heuristic vocabularies
 # ============================================================================
 
-# These are common units/measurement words. They help reject cases such as:
-#   5.2 years
-#   10.5 miles
-#   2.5 million
-#
-# This is intentionally conservative.
 MEASUREMENT_WORDS = {
-    "year",
     "years",
-    "month",
+    "year",
     "months",
-    "week",
-    "weeks",
-    "day",
+    "month",
     "days",
-    "hour",
+    "day",
     "hours",
-    "minute",
+    "hour",
     "minutes",
-    "second",
-    "seconds",
-    "mile",
-    "miles",
-    "meter",
-    "meters",
-    "metre",
-    "metres",
-    "km",
-    "kms",
-    "kilometer",
-    "kilometers",
-    "kilometre",
-    "kilometres",
-    "ft",
-    "feet",
-    "foot",
-    "inch",
-    "inches",
+    "minute",
     "percent",
     "percentage",
     "million",
@@ -210,22 +133,9 @@ MEASUREMENT_WORDS = {
     "thousand",
     "dollars",
     "dollar",
-    "usd",
-    "rupees",
-    "rupee",
-    "kg",
-    "kgs",
-    "gram",
-    "grams",
-    "mg",
-    "litre",
-    "litres",
-    "liter",
-    "liters",
 }
 
 
-# Common address/location indicators.
 ADDRESS_WORDS = {
     "street",
     "st.",
@@ -250,37 +160,51 @@ ADDRESS_WORDS = {
 }
 
 
-# Common legal words. These are useful when a numeric candidate starts
-# with a lowercase word or an otherwise ambiguous token.
 LEGAL_START_WORDS = {
     "agreement",
     "acceptance",
+    "acknowledgment",
     "assignment",
     "confidentiality",
     "company",
+    "commission",
+    "consultant",
     "distributor",
     "distributors",
-    "either",
+    "duties",
     "employee",
     "employer",
+    "either",
     "grant",
     "insurance",
+    "indemnification",
+    "independent",
+    "inspection",
     "license",
     "licence",
     "liability",
+    "laws",
+    "modification",
+    "nonassignment",
+    "notification",
     "payment",
     "party",
     "parties",
     "price",
     "products",
+    "rebates",
+    "records",
     "renewal",
     "representations",
+    "retention",
     "rights",
+    "safety",
     "services",
-    "termination",
+    "subcontracting",
     "term",
+    "termination",
     "warranty",
-    "whereas",
+    "work",
 }
 
 
@@ -289,18 +213,7 @@ LEGAL_START_WORDS = {
 # ============================================================================
 
 @dataclass
-class _Line:
-    """A source line together with its page and position metadata."""
-
-    text: str
-    page: int
-    index: int
-
-
-@dataclass
 class _Marker:
-    """A structural marker candidate."""
-
     boundary_type: BoundaryType
     clause_id: str
     lead_text: str
@@ -310,25 +223,27 @@ class _Marker:
 
 @dataclass
 class Clause:
-    """
-    Internal clause representation.
-
-    text_parts contains paragraphs/lines after the structural identifier.
-    """
-
     clause_id: str
     section: str
     page: int
     language: str
-    text_parts: List[str]
+    original_text_parts: List[str]
+    processed_text_parts: List[str]
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "clause_id": self.clause_id,
             "section": self.section,
             "page": self.page,
-            "text": "\n\n".join(
-                part for part in self.text_parts if part.strip()
+            "original_text": "\n\n".join(
+                part
+                for part in self.original_text_parts
+                if part.strip()
+            ),
+            "processed_text": "\n\n".join(
+                part
+                for part in self.processed_text_parts
+                if part.strip()
             ),
             "language": self.language,
         }
@@ -339,31 +254,38 @@ class Clause:
 # ============================================================================
 
 def _normalize_newlines(text: str) -> str:
-    """Normalize newline representation without changing content otherwise."""
     return text.replace("\r\n", "\n").replace("\r", "\n")
-
-
-def _is_page_marker(text: str) -> bool:
-    return bool(PAGE_MARKER_RE.fullmatch(text.strip()))
 
 
 def _is_blank(text: str) -> bool:
     return not text.strip()
 
 
+def _is_page_marker(text: str) -> bool:
+    return bool(PAGE_MARKER_RE.fullmatch(text.strip()))
+
+
 def _first_word(text: str) -> str:
-    match = re.match(r"([A-Za-z][A-Za-z0-9'.-]*)", text.strip())
-    return match.group(1).lower() if match else ""
+    match = re.match(
+        r"([A-Za-z][A-Za-z0-9'.-]*)",
+        text.strip(),
+    )
+
+    if not match:
+        return ""
+
+    return match.group(1).lower()
 
 
 def _is_roman(value: str) -> bool:
     return bool(
         re.fullmatch(
-            r"(?i)(?=[MDCLXVI]+$)M{0,4}"
+            r"(?=[MDCLXVI]+$)"
+            r"M{0,4}"
             r"(?:C[MD]|D?C{0,3})?"
             r"(?:X[CL]|L?X{0,3})?"
             r"(?:I[XV]|V?I{0,3})?",
-            value,
+            value.upper(),
         )
     )
 
@@ -375,28 +297,81 @@ def _numeric_depth(clause_id: str) -> int:
 def _numeric_parent(clause_id: str) -> Optional[str]:
     if "." not in clause_id:
         return None
+
     return clause_id.rsplit(".", 1)[0]
+
+
+def _top_level_number(clause_id: str) -> Optional[int]:
+    try:
+        return int(clause_id.split(".")[0])
+    except (ValueError, IndexError):
+        return None
+
+
+def _numeric_components(
+    clause_id: str,
+) -> Optional[Tuple[int, ...]]:
+    try:
+        return tuple(
+            int(part)
+            for part in clause_id.split(".")
+        )
+    except ValueError:
+        return None
 
 
 def _is_top_level_numeric(clause_id: str) -> bool:
     return _numeric_depth(clause_id) == 1
 
 
-def _has_nested_numeric_prefix(clause_id: str) -> bool:
-    return "." in clause_id
+def _is_standalone_numeric(text: str) -> bool:
+    return bool(
+        STANDALONE_NUMERIC_RE.fullmatch(
+            text.strip()
+        )
+    )
 
+def _is_standalone_numeric(text: str) -> bool:
+    return bool(
+        STANDALONE_NUMERIC_RE.fullmatch(
+            text.strip()
+        )
+    )
+
+def _looks_like_non_clause_block(text: str) -> bool:
+    """
+    Detect common administrative/signature content that should not
+    be interpreted as a substantive contract clause.
+    """
+    normalized = re.sub(
+        r"\s+",
+        " ",
+        text,
+    ).strip().upper()
+
+    administrative_phrases = (
+        "APPROVED AS TO INSURANCE",
+        "APPROVED AS TO FORM",
+        "IN WITNESS WHEREOF",
+        "DISTRIBUTION:",
+        "SIGNATURE",
+        "SIGNED",
+        "PRINTED",
+    )
+
+    return any(
+        phrase in normalized
+        for phrase in administrative_phrases
+    )
 
 # ============================================================================
-# Structural detection
+# Marker detection
 # ============================================================================
 
-def _classify_paren_marker(text: str) -> Optional[_Marker]:
-    """
-    Detect parenthesized list items.
+def _classify_paren_marker(
+    text: str,
+) -> Optional[_Marker]:
 
-    These are deliberately NOT top-level clauses.
-    They are retained inside the current clause.
-    """
     match = PAREN_RE.match(text.strip())
 
     if not match:
@@ -407,10 +382,13 @@ def _classify_paren_marker(text: str) -> Optional[_Marker]:
 
     if value.isalpha() and value.isupper():
         boundary_type = BoundaryType.ALPHA_UPPER_LIST
+
     elif value.isalpha() and value.islower():
         boundary_type = BoundaryType.ALPHA_LOWER_LIST
+
     elif _is_roman(value):
         boundary_type = BoundaryType.ROMAN_LIST
+
     else:
         return None
 
@@ -423,80 +401,74 @@ def _classify_paren_marker(text: str) -> Optional[_Marker]:
     )
 
 
-def _classify_marker(text: str) -> Optional[_Marker]:
-    """
-    Detect structural candidates.
+def _classify_marker(
+    text: str,
+) -> Optional[_Marker]:
 
-    IMPORTANT:
-    Detection is not acceptance. The segmentation engine validates
-    candidates before treating them as boundaries.
-    """
     stripped = text.strip()
 
-    # ARTICLE IV ...
-    match = ARTICLE_RE.fullmatch(stripped)
-    if match:
-        number = match.group(1)
-        lead = match.group(2).strip()
+    if not stripped:
+        return None
 
+    # ARTICLE
+    match = ARTICLE_RE.fullmatch(stripped)
+
+    if match:
         return _Marker(
             boundary_type=BoundaryType.ARTICLE,
-            clause_id=f"ARTICLE {number.upper()}",
-            lead_text=lead,
+            clause_id=match.group(1),
+            lead_text=match.group(2).strip(),
             priority=Priority.STRONG,
             raw_text=text,
         )
 
-    # SECTION 3 ...
+    # SECTION
     match = SECTION_RE.fullmatch(stripped)
-    if match:
-        number = match.group(1)
-        lead = match.group(2).strip()
 
+    if match:
         return _Marker(
             boundary_type=BoundaryType.SECTION,
-            clause_id=f"SECTION {number}",
-            lead_text=lead,
+            clause_id=match.group(1),
+            lead_text=match.group(2).strip(),
             priority=Priority.STRONG,
             raw_text=text,
         )
 
-    # Numeric candidates.
+    # Numeric
     match = NUMERIC_RE.fullmatch(stripped)
+
     if match:
-        clause_id = match.group(1)
-        lead = match.group(2).strip()
-
-        priority = (
-            Priority.STRONG
-            if _has_nested_numeric_prefix(clause_id)
-            else Priority.MEDIUM
-        )
-
         return _Marker(
             boundary_type=BoundaryType.NUMERIC,
-            clause_id=clause_id,
-            lead_text=lead,
-            priority=priority,
+            clause_id=match.group(1),
+            lead_text=match.group(2).strip(),
+            priority=Priority.STRONG,
             raw_text=text,
         )
 
-    # Recitals A. B. C. are considered only by contextual validation.
+    # Recital
     match = RECITAL_RE.fullmatch(stripped)
-    if match:
-        letter = match.group(1)
-        lead = match.group(2).strip()
 
+    if match:
         return _Marker(
             boundary_type=BoundaryType.RECITAL,
-            clause_id=letter,
-            lead_text=lead,
+            clause_id=match.group(1),
+            lead_text=match.group(2).strip(),
             priority=Priority.MEDIUM,
             raw_text=text,
         )
 
-    # Parenthesized list.
-    return _classify_paren_marker(stripped)
+    # Parenthesized/list markers such as:
+    # (A), (B), (1), 1), 2), etc.
+    #
+    # These are content inside a clause, not top-level
+    # clause boundaries.
+    paren_marker = _classify_paren_marker(stripped)
+
+    if paren_marker is not None:
+        return None
+
+    return None
 
 
 # ============================================================================
@@ -508,29 +480,23 @@ def _looks_like_heading(
     previous_blank: bool,
     next_blank: bool,
 ) -> bool:
-    """
-    Conservative heading detector.
-
-    A heading should normally be:
-    - standalone
-    - surrounded by paragraph boundaries
-    - reasonably short
-    - not a normal sentence
-    - not obviously a list or numeric expression
-    """
 
     stripped = text.strip()
 
     if not stripped:
         return False
 
-    if not (previous_blank and next_blank):
+    if not previous_blank or not next_blank:
         return False
 
     if len(stripped) > 120:
         return False
 
+    # Structural markers take priority.
     if NUMERIC_RE.fullmatch(stripped):
+        return False
+
+    if STANDALONE_NUMERIC_RE.fullmatch(stripped):
         return False
 
     if ARTICLE_RE.fullmatch(stripped):
@@ -545,62 +511,55 @@ def _looks_like_heading(
     if PAREN_RE.fullmatch(stripped):
         return False
 
-    # Sentence punctuation strongly suggests ordinary prose.
-    if stripped.endswith((".", "?", "!", ";")):
+    # A heading should not look like ordinary prose.
+    if stripped.endswith(
+        (".", "?", "!", ";", ":")
+    ):
         return False
 
     words = stripped.split()
 
-    if len(words) > 12:
+    if not words or len(words) > 12:
         return False
 
-    # Strongest signal: all caps.
+    # All-caps heading.
     if ALL_CAPS_HEADING_RE.fullmatch(stripped):
         return True
 
-    # Title Case headings such as:
-    #   Term and Expiration
-    #   Governing Law
-    #   Intellectual Property
-    if len(words) >= 2:
-        alpha_words = [
-            word for word in words
-            if any(character.isalpha() for character in word)
-        ]
+    # Title-case heading.
+    alpha_words = [
+        word
+        for word in words
+        if any(character.isalpha() for character in word)
+    ]
 
-        if not alpha_words:
-            return False
+    if not alpha_words:
+        return False
 
-        title_like = 0
+    title_like = 0
 
-        for word in alpha_words:
-            cleaned = word.strip("\"'`()[]{}:,-")
-            if not cleaned:
-                continue
+    for word in alpha_words:
+        cleaned = word.strip(
+            "\"'`()[]{}:,-"
+        )
 
-            if cleaned[0].isupper():
-                title_like += 1
+        if cleaned and cleaned[0].isupper():
+            title_like += 1
 
-        # Avoid treating ordinary "The Company" prose as a heading.
-        if title_like == len(alpha_words) and len(alpha_words) >= 2:
-            return True
-
-    return False
+    return (
+        title_like == len(alpha_words)
+        and len(alpha_words) >= 2
+    )
 
 
 # ============================================================================
-# Numeric validation
+# Candidate validation
 # ============================================================================
 
-def _looks_like_measurement_or_address(lead_text: str) -> bool:
-    """
-    Reject numeric expressions which happen to look like legal numbering.
+def _looks_like_measurement_or_address(
+    lead_text: str,
+) -> bool:
 
-    Examples:
-        5.2 years
-        10.5 Main Street
-        2.5 million dollars
-    """
     stripped = lead_text.strip()
 
     if not stripped:
@@ -611,39 +570,39 @@ def _looks_like_measurement_or_address(lead_text: str) -> bool:
     if first in MEASUREMENT_WORDS:
         return True
 
-    # Common numeric address pattern:
-    # 10.5 Main Street
     words = stripped.split()
 
     if len(words) >= 2:
-        second_word = words[1].lower().strip(".,;:")
 
-        if second_word in ADDRESS_WORDS:
+        second = (
+            words[1]
+            .lower()
+            .strip(".,;:")
+        )
+
+        if second in ADDRESS_WORDS:
             return True
 
     return False
 
 
-def _looks_like_sentence_fragment(lead_text: str) -> bool:
-    """
-    Detect obvious ordinary prose fragments.
+def _looks_like_sentence_fragment(
+    lead_text: str,
+) -> bool:
 
-    This is deliberately conservative because legal clauses can legitimately
-    begin with lowercase words after formatting loss.
-    """
     stripped = lead_text.strip()
 
     if not stripped:
         return True
 
-    first = _first_word(stripped)
-
-    # A measurement/address is not a clause title.
-    if _looks_like_measurement_or_address(stripped):
+    if _looks_like_measurement_or_address(
+        stripped
+    ):
         return True
 
-    # Obvious ordinary-language starts.
-    if first in {
+    first = _first_word(stripped)
+
+    return first in {
         "and",
         "but",
         "or",
@@ -656,7 +615,35 @@ def _looks_like_sentence_fragment(lead_text: str) -> bool:
         "that",
         "than",
         "as",
-    }:
+    }
+
+
+def _is_plausible_clause_title(
+    lead_text: str,
+) -> bool:
+
+    stripped = lead_text.strip()
+
+    if not stripped:
+        return False
+
+    if _looks_like_measurement_or_address(
+        stripped
+    ):
+        return False
+
+    if _looks_like_sentence_fragment(
+        stripped
+    ):
+        return False
+
+    first = _first_word(stripped)
+
+    if first in LEGAL_START_WORDS:
+        return True
+
+    # Legal headings normally begin with a capitalized word.
+    if stripped[0].isupper():
         return True
 
     return False
@@ -665,19 +652,9 @@ def _looks_like_sentence_fragment(lead_text: str) -> bool:
 def _validate_numeric_candidate(
     marker: _Marker,
     previous_numeric_id: Optional[str],
+    existing_numeric_ids: List[str],
     has_existing_clause: bool,
 ) -> bool:
-    """
-    Validate a numeric clause candidate.
-
-    Rules:
-    1. Reject empty identifiers/text.
-    2. Reject obvious measurements and addresses.
-    3. Strongly prefer legal/title-like candidates.
-    4. Accept nested numbering when it has structural context.
-    5. Accept sequential top-level numbering.
-    6. Avoid blindly accepting every decimal-looking line.
-    """
 
     clause_id = marker.clause_id
     lead = marker.lead_text.strip()
@@ -685,74 +662,172 @@ def _validate_numeric_candidate(
     if not clause_id or not lead:
         return False
 
-    if _looks_like_measurement_or_address(lead):
+    if _looks_like_measurement_or_address(
+        lead
+    ):
         return False
 
-    if _looks_like_sentence_fragment(lead):
+    if _looks_like_sentence_fragment(
+        lead
+    ):
         return False
 
-    first = _first_word(lead)
+    components = _numeric_components(
+        clause_id
+    )
 
-    # Nested numbering is a very strong legal-document signal.
-    if _has_nested_numeric_prefix(clause_id):
-        # If we have an existing parent, this is especially reliable.
+    if components is None:
+        return False
+
+    # Never create the same numeric clause twice.
+    # A repeated number may belong to a list, signature block,
+    # exhibit, or other non-clause content.
+    if clause_id in existing_numeric_ids:
+        return False
+
+    # --------------------------------------------------------------
+    # Nested numbering
+    # --------------------------------------------------------------
+
+    if len(components) > 1:
+
+        top_level = components[0]
+
+        # If this is the first nested clause encountered,
+        # require a plausible legal title.
+        if not existing_numeric_ids:
+            return _is_plausible_clause_title(
+                lead
+            )
+
+        # Find the most recent numeric clause at the same
+        # hierarchical level.
+        same_level = [
+            item
+            for item in existing_numeric_ids
+            if _numeric_depth(item)
+            == len(components)
+        ]
+
+        if same_level:
+
+            previous_same_level = (
+                _numeric_components(
+                    same_level[-1]
+                )
+            )
+
+            if previous_same_level:
+
+                # Example:
+                # 1.1 -> 1.2 -> 1.3
+                #
+                # Same parent, increasing child.
+                if (
+                    previous_same_level[:-1]
+                    == components[:-1]
+                    and components[-1]
+                    > previous_same_level[-1]
+                ):
+                    return True
+
+        # Also accept a first child such as 1.1 when the
+        # corresponding top-level clause exists.
+        parent = _numeric_parent(
+            clause_id
+        )
+
+        if parent in existing_numeric_ids:
+            return _is_plausible_clause_title(
+                lead
+            )
+
+        # More deeply nested clauses:
+        #
+        # 1.1.1 -> 1.1.2
+        #
+        # are accepted when they continue the same parent.
         if previous_numeric_id:
-            parent = _numeric_parent(clause_id)
 
-            if parent == previous_numeric_id:
-                return True
+            previous_components = (
+                _numeric_components(
+                    previous_numeric_id
+                )
+            )
 
-        # Still accept nested numbering when the text strongly looks like
-        # a heading/title.
-        if lead[0].isupper():
+            if previous_components:
+
+                if (
+                    len(previous_components)
+                    == len(components)
+                    and previous_components[:-1]
+                    == components[:-1]
+                    and components[-1]
+                    > previous_components[-1]
+                ):
+                    return True
+
+        return _is_plausible_clause_title(
+            lead
+        )
+
+    # --------------------------------------------------------------
+    # Top-level numbering
+    # --------------------------------------------------------------
+
+    current_number = components[0]
+
+    if first_word := _first_word(lead):
+
+        if first_word in LEGAL_START_WORDS:
             return True
 
-        if first in LEGAL_START_WORDS:
-            return True
+    # A top-level clause title normally begins with a capitalized word.
+    if lead and lead[0].isupper():
 
-        return False
+        # Sequential numbering is particularly strong evidence.
+        if previous_numeric_id:
 
-    # Top-level numbers.
-    #
-    # If the text begins with a conventional legal/title word, accept.
-    if first in LEGAL_START_WORDS:
-        return True
+            previous_number = _top_level_number(
+                previous_numeric_id
+            )
 
-    # Capitalized title-like text is usually a clause heading.
-    if lead[0].isupper():
-        return True
-
-    # If this is clearly part of an established numbered sequence, accept.
-    if previous_numeric_id:
-        try:
-            previous = int(previous_numeric_id.split(".")[0])
-            current = int(clause_id)
-
-            if current == previous + 1:
+            if (
+                previous_number is not None
+                and current_number
+                == previous_number + 1
+            ):
                 return True
-        except ValueError:
-            pass
 
-    # Without evidence, reject.
+        # If there are no existing clauses, a plausible title is enough.
+        if not has_existing_clause:
+            return _is_plausible_clause_title(
+                lead
+            )
+
+        # A top-level title is still valid even when numbering skips.
+        # Real contracts frequently omit or restructure numbering.
+        return _is_plausible_clause_title(
+            lead
+        )
+
     return False
 
 
 def _validate_marker(
     marker: _Marker,
     previous_numeric_id: Optional[str],
+    existing_numeric_ids: List[str],
     has_existing_clause: bool,
     preamble: bool,
 ) -> bool:
-    """
-    Rule-based acceptance layer.
-
-    This is intentionally separate from regex detection.
-    """
 
     if marker.boundary_type == BoundaryType.NUMERIC:
+
         return _validate_numeric_candidate(
             marker,
             previous_numeric_id,
+            existing_numeric_ids,
             has_existing_clause,
         )
 
@@ -763,15 +838,14 @@ def _validate_marker(
         return bool(marker.clause_id)
 
     if marker.boundary_type == BoundaryType.RECITAL:
-        # Multiple recital clauses may occur consecutively in the preamble.
         return preamble
 
+    # Lists are never top-level boundaries.
     if marker.boundary_type in {
         BoundaryType.ALPHA_UPPER_LIST,
         BoundaryType.ALPHA_LOWER_LIST,
         BoundaryType.ROMAN_LIST,
     }:
-        # Lists are never top-level boundaries.
         return False
 
     return marker.boundary_type == BoundaryType.HEADING
@@ -782,9 +856,9 @@ def _validate_marker(
 # ============================================================================
 
 class _SegmentationEngine:
-    """Deterministic rule-based clause segmentation engine."""
 
     def __init__(self, language: str):
+
         self.language = language
 
         self.clauses: List[Clause] = []
@@ -793,77 +867,112 @@ class _SegmentationEngine:
 
         self.current_clause: Optional[Clause] = None
 
-        # Current paragraph buffer.
-        self.buffer: List[str] = []
+        self.original_buffer: List[str] = []
+        self.processed_buffer: List[str] = []
 
         self.buffer_page: Optional[int] = None
 
-        # Used to decide whether a numeric container such as
-        # "1. ESTABLISHMENT OF DISTRIBUTORSHIP"
-        # should become section context when 1.1 follows it.
         self.pending_container: Optional[Clause] = None
 
         self.previous_numeric_id: Optional[str] = None
 
         self.seen_real_clause = False
 
+        # Keep track of accepted numeric IDs independently
+        # from the current clause.
+        self.numeric_ids: List[str] = []
+
     # ------------------------------------------------------------------
-    # Buffer handling
+    # Buffer
     # ------------------------------------------------------------------
 
-    def _begin_buffer(self, page: int) -> None:
+    def _append_line(
+        self,
+        original_text: str,
+        processed_text: str,
+        page: int,
+    ) -> None:
+
         if self.buffer_page is None:
             self.buffer_page = page
 
-    def _append_line(self, text: str, page: int) -> None:
-        """
-        Append a source line while retaining line structure.
+        self.original_buffer.append(
+            original_text.rstrip()
+        )
 
-        Detection uses stripped text, but stored content does not get
-        collapsed into spaces.
-        """
-        if self.buffer_page is None:
-            self.buffer_page = page
-
-        self.buffer.append(text.rstrip())
+        self.processed_buffer.append(
+            processed_text.rstrip()
+        )
 
     def _flush_buffer(self) -> None:
-        if not self.buffer:
+
+        if not self.processed_buffer:
             return
 
-        # Remove only truly empty edges.
-        while self.buffer and not self.buffer[0].strip():
-            self.buffer.pop(0)
+        while (
+            self.processed_buffer
+            and not self.processed_buffer[0].strip()
+        ):
+            self.processed_buffer.pop(0)
+            self.original_buffer.pop(0)
 
-        while self.buffer and not self.buffer[-1].strip():
-            self.buffer.pop()
+        while (
+            self.processed_buffer
+            and not self.processed_buffer[-1].strip()
+        ):
+            self.processed_buffer.pop()
+            self.original_buffer.pop()
 
-        if not self.buffer:
+        if not self.processed_buffer:
+
             self.buffer_page = None
             return
 
-        paragraph = "\n".join(self.buffer)
+        original_text = "\n".join(
+            self.original_buffer
+        )
+
+        processed_text = "\n".join(
+            self.processed_buffer
+        )
 
         if self.current_clause is None:
-            # Unnumbered prose becomes a deterministic fallback clause.
-            clause_id = f"UNSPECIFIED-{len(self.clauses) + 1}"
+
+            clause_id = (
+                f"UNSPECIFIED-{len(self.clauses) + 1}"
+            )
 
             clause = Clause(
                 clause_id=clause_id,
                 section=self.current_section,
                 page=self.buffer_page or 1,
                 language=self.language,
-                text_parts=[paragraph],
+                original_text_parts=[
+                    original_text
+                ],
+                processed_text_parts=[
+                    processed_text
+                ],
             )
 
             self.clauses.append(clause)
+
             self.current_clause = clause
+
             self.seen_real_clause = True
 
         else:
-            self.current_clause.text_parts.append(paragraph)
 
-        self.buffer.clear()
+            self.current_clause.original_text_parts.append(
+                original_text
+            )
+
+            self.current_clause.processed_text_parts.append(
+                processed_text
+            )
+
+        self.original_buffer.clear()
+        self.processed_buffer.clear()
         self.buffer_page = None
 
     # ------------------------------------------------------------------
@@ -875,102 +984,156 @@ class _SegmentationEngine:
         marker: _Marker,
         page: int,
     ) -> None:
-        """
-        Create a new clause from an accepted structural marker.
-        """
 
         self._flush_buffer()
 
-        clause = Clause(
-            clause_id=marker.clause_id,
-            section=self.current_section,
-            page=page,
-            language=self.language,
-            text_parts=[],
-        )
+        # Top-level numeric clauses such as "2. TERM" also
+        # establish a new section context.
+        section = self.current_section
 
-        if marker.lead_text:
-            clause.text_parts.append(marker.lead_text)
-
-        self.clauses.append(clause)
-        self.current_clause = clause
-        self.seen_real_clause = True
-
-        if marker.boundary_type == BoundaryType.NUMERIC:
-            self.previous_numeric_id = marker.clause_id
-
-        # A top-level numeric heading may later become section context.
         if (
             marker.boundary_type == BoundaryType.NUMERIC
             and _is_top_level_numeric(marker.clause_id)
         ):
-            self.pending_container = clause
+            section = marker.raw_text.strip()
+
+            # Remove the numeric prefix.
+            section = re.sub(
+                r"^\d+(?:\.\s*)?",
+                "",
+                section,
+            ).strip()
+
+            # If the heading and clause body are on the same line,
+            # keep only the heading.
+            if "." in section:
+                section = section.split(".", 1)[0].strip()
+
+        clause = Clause(
+            clause_id=marker.clause_id,
+            section=section,
+            page=page,
+            language=self.language,
+            original_text_parts=[],
+            processed_text_parts=[],
+        )
+
+        # Preserve the complete structural heading.
+        if marker.raw_text.strip():
+
+            clause.original_text_parts.append(
+                marker.raw_text.strip()
+            )
+
+            clause.processed_text_parts.append(
+                marker.raw_text.strip()
+            )
+
+        self.clauses.append(clause)
+
+        self.current_clause = clause
+
+        self.seen_real_clause = True
+
+        if marker.boundary_type == BoundaryType.NUMERIC:
+
+            self.previous_numeric_id = (
+                marker.clause_id
+            )
+
+            if marker.clause_id not in self.numeric_ids:
+                self.numeric_ids.append(
+                    marker.clause_id
+                )
+
+            # A top-level numeric clause may become a
+            # section/container if a nested child follows.
+            if _is_top_level_numeric(
+                marker.clause_id
+            ):
+                self.pending_container = clause
+
+                # Keep the new top-level heading as the
+                # active section for subsequent nested clauses.
+                self.current_section = section
+
+            else:
+                self.pending_container = None
+
         else:
+
             self.pending_container = None
 
     # ------------------------------------------------------------------
-    # Section handling
+    # Heading handling
     # ------------------------------------------------------------------
 
-    def _apply_heading(self, text: str) -> None:
-        """
-        Set section context from a standalone heading.
-
-        The heading itself is not emitted as a clause.
-        """
+    def _apply_heading(
+        self,
+        text: str,
+    ) -> None:
 
         self._flush_buffer()
 
         self.current_section = text.strip()
 
         self.current_clause = None
+
         self.pending_container = None
+
+    # ------------------------------------------------------------------
+    # Pending container
+    # ------------------------------------------------------------------
 
     def _resolve_pending_container(
         self,
         next_marker: _Marker,
     ) -> None:
-        """
-        Convert a top-level numeric container into section context when its
-        child clause immediately follows.
-
-        Example:
-
-            1. ESTABLISHMENT OF DISTRIBUTORSHIP
-            1.1 Grant and Acceptance
-
-        becomes:
-
-            section = "ESTABLISHMENT OF DISTRIBUTORSHIP"
-            clause_id = "1.1"
-
-        If the parent has substantive body text, it remains a clause.
-        """
 
         if self.pending_container is None:
             return
 
         if next_marker.boundary_type != BoundaryType.NUMERIC:
+            self.pending_container = None
             return
 
-        parent_id = _numeric_parent(next_marker.clause_id)
+        parent_id = _numeric_parent(
+            next_marker.clause_id
+        )
 
-        if parent_id != self.pending_container.clause_id:
+        if (
+            parent_id
+            != self.pending_container.clause_id
+        ):
             self.pending_container = None
             return
 
         parent = self.pending_container
 
-        # A container with only its heading/title should become section
-        # context rather than an independent clause.
-        if len(parent.text_parts) == 1:
-            title = parent.text_parts[0].strip()
+        # A top-level numeric heading followed by a nested
+        # child represents a section/container.
+        if (
+            len(parent.processed_text_parts)
+            == 1
+        ):
 
-            if title:
-                self.current_section = title
+            heading = (
+                parent.processed_text_parts[0]
+                .strip()
+            )
 
-            if parent in self.clauses:
-                self.clauses.remove(parent)
+            match = NUMERIC_RE.fullmatch(
+                heading
+            )
+
+            if match:
+                heading = (
+                    match.group(2)
+                    .strip()
+                )
+
+            if heading:
+                self.current_section = heading
 
         self.pending_container = None
 
@@ -984,13 +1147,8 @@ class _SegmentationEngine:
         page: int,
         preamble: bool,
     ) -> bool:
-        """
-        Process an accepted marker.
 
-        Returns True when the marker was handled as a boundary.
-        """
-
-        # Parenthesized lists stay inside the current clause.
+        # Lists remain ordinary content.
         if marker.boundary_type in {
             BoundaryType.ALPHA_UPPER_LIST,
             BoundaryType.ALPHA_LOWER_LIST,
@@ -1001,89 +1159,267 @@ class _SegmentationEngine:
         if not _validate_marker(
             marker,
             self.previous_numeric_id,
-            self.current_clause is not None,
+            self.numeric_ids,
+            self.seen_real_clause,
             preamble,
         ):
             return False
 
-        # Before creating a child numeric clause, resolve its parent.
-        self._resolve_pending_container(marker)
+        self._resolve_pending_container(
+            marker
+        )
 
         if marker.boundary_type == BoundaryType.HEADING:
-            self._apply_heading(marker.lead_text)
+
+            self._apply_heading(
+                marker.lead_text
+            )
+
             return True
 
+        # ARTICLE / SECTION labels become section context.
         if marker.boundary_type == BoundaryType.ARTICLE:
-            self.current_section = marker.clause_id
+
+            if marker.lead_text:
+                self.current_section = (
+                    marker.lead_text
+                )
 
         elif marker.boundary_type == BoundaryType.SECTION:
-            self.current_section = marker.clause_id
 
-        self._create_clause(marker, page)
+            if marker.lead_text:
+                self.current_section = (
+                    marker.lead_text
+                )
+
+        self._create_clause(
+            marker,
+            page,
+        )
 
         return True
 
     # ------------------------------------------------------------------
-    # Lines and paragraphs
+    # Page processing
     # ------------------------------------------------------------------
 
-    def process_page(self, page_number: int, text: str) -> None:
-        """
-        Process one page without treating the page boundary as a clause
-        boundary.
-        """
+    def process_page(
+        self,
+        page_number: int,
+        original_text: str,
+        processed_text: str,
+    ) -> None:
 
-        normalized = _normalize_newlines(text)
-        lines = normalized.split("\n")
+        original_lines = _normalize_newlines(
+            original_text
+        ).split("\n")
 
-        for position, raw_line in enumerate(lines):
-            stripped = raw_line.strip()
+        processed_lines = _normalize_newlines(
+            processed_text
+        ).split("\n")
+
+        if len(original_lines) != len(
+            processed_lines
+        ):
+            raise ValueError(
+                "Original and processed text must preserve "
+                "line alignment."
+            )
+
+        position = 0
+        total = len(processed_lines)
+
+        while position < total:
+
+            original_line = (
+                original_lines[position]
+            )
+
+            processed_line = (
+                processed_lines[position]
+            )
+
+            stripped = processed_line.strip()
+
+            # ----------------------------------------------------------
+            # Page marker
+            # ----------------------------------------------------------
 
             if _is_page_marker(stripped):
+
+                position += 1
+                continue
+
+            # ----------------------------------------------------------
+            # Blank line
+            # ----------------------------------------------------------
+
+            if _is_blank(processed_line):
+
+                self._flush_buffer()
+
+                position += 1
                 continue
 
             previous_blank = (
                 position == 0
-                or _is_blank(lines[position - 1])
+                or _is_blank(
+                    processed_lines[position - 1]
+                )
             )
 
             next_blank = (
-                position == len(lines) - 1
-                or _is_blank(lines[position + 1])
+                position == total - 1
+                or _is_blank(
+                    processed_lines[position + 1]
+                )
             )
 
-            # Blank line closes the current paragraph but NOT the clause.
-            if _is_blank(raw_line):
-                self._flush_buffer()
-                continue
+            # ----------------------------------------------------------
+            # Parenthesized list
+            # ----------------------------------------------------------
 
-            marker = _classify_marker(stripped)
+            marker = _classify_marker(
+                stripped
+            )
 
-            # Parenthesized lists should be appended exactly as part of the
-            # current clause.
             if marker and marker.boundary_type in {
                 BoundaryType.ALPHA_UPPER_LIST,
                 BoundaryType.ALPHA_LOWER_LIST,
                 BoundaryType.ROMAN_LIST,
             }:
-                if self.current_clause is not None:
-                    self._append_line(raw_line, page_number)
-                else:
-                    self._append_line(raw_line, page_number)
+
+                self._append_line(
+                    original_line,
+                    processed_line,
+                    page_number,
+                )
+
+                position += 1
                 continue
 
-            # Standalone heading.
+            # ----------------------------------------------------------
+            # Standalone numeric marker
+            # ----------------------------------------------------------
+
+            if _is_standalone_numeric(
+                stripped
+            ):
+
+                match = STANDALONE_NUMERIC_RE.fullmatch(
+                    stripped
+                )
+
+                numeric_id = (
+                    match.group(1)
+                    if match
+                    else ""
+                )
+
+                # A standalone number is only promoted if the
+                # following line looks like a real legal heading.
+                if position + 1 < total:
+
+                    next_processed = (
+                        processed_lines[
+                            position + 1
+                        ]
+                    )
+
+                    next_original = (
+                        original_lines[
+                            position + 1
+                        ]
+                    )
+
+                    next_stripped = (
+                        next_processed.strip()
+                    )
+
+                    if (
+                        next_stripped
+                        and not _is_page_marker(
+                        next_stripped
+                        )
+                        and _looks_like_heading(
+                            next_stripped,
+                            previous_blank=True,
+                            next_blank=(
+                                position + 1 == total - 1
+                                or _is_blank(
+                                    processed_lines[position + 2]
+                                )
+                            ),
+                        )
+                    ):
+
+                        combined = (
+                            f"{numeric_id}. "
+                            f"{next_stripped}"
+                        )
+
+                        combined_marker = (
+                            _classify_marker(
+                                combined
+                            )
+                        )
+
+                        if combined_marker:
+
+                            if self._process_marker(
+                                combined_marker,
+                                page_number,
+                                preamble=(
+                                    not self.seen_real_clause
+                                ),
+                            ):
+
+                                # Replace the raw marker with
+                                # the actual source lines.
+                                if self.current_clause:
+
+                                    raw_combined = (
+                                        f"{original_line.strip()}\n"
+                                        f"{next_original.strip()}"
+                                    )
+
+                                    self.current_clause.original_text_parts[
+                                        -1
+                                    ] = raw_combined
+
+                                    self.current_clause.processed_text_parts[
+                                        -1
+                                    ] = combined
+
+                                position += 2
+                                continue
+
+                # Otherwise preserve it as ordinary content.
+                self._append_line(
+                    original_line,
+                    processed_line,
+                    page_number,
+                )
+
+                position += 1
+                continue
+
+            # ----------------------------------------------------------
+            # Standalone heading
+            # ----------------------------------------------------------
+
             if _looks_like_heading(
                 stripped,
                 previous_blank,
                 next_blank,
             ):
+
                 heading_marker = _Marker(
                     boundary_type=BoundaryType.HEADING,
                     clause_id="HEADING",
                     lead_text=stripped,
                     priority=Priority.MEDIUM,
-                    raw_text=raw_line,
+                    raw_text=processed_line,
                 )
 
                 if self._process_marker(
@@ -1091,88 +1427,179 @@ class _SegmentationEngine:
                     page_number,
                     preamble=(
                         not self.seen_real_clause
-                        or (
-                            marker is not None
-                            and marker.boundary_type == BoundaryType.RECITAL
-                        )
                     ),
                 ):
+
+                    position += 1
                     continue
 
-            # Structural marker candidate.
+            # ----------------------------------------------------------
+            # Structural marker
+            # ----------------------------------------------------------
+
             if marker:
+
                 if self._process_marker(
                     marker,
                     page_number,
                     preamble=(
                         not self.seen_real_clause
-                        or (
-                            marker is not None
-                            and marker.boundary_type == BoundaryType.RECITAL
-                        )
                     ),
                 ):
+
+                    position += 1
                     continue
 
-            # Ordinary continuation/content line.
-            self._append_line(raw_line, page_number)
+            # ----------------------------------------------------------
+            # Ordinary content
+            # ----------------------------------------------------------
 
-    def finalize(self) -> List[Dict[str, Any]]:
+            self._append_line(
+                original_line,
+                processed_line,
+                page_number,
+            )
+
+            position += 1
+
+    # ------------------------------------------------------------------
+    # Finalization
+    # ------------------------------------------------------------------
+
+    def finalize(
+        self,
+    ) -> List[Dict[str, Any]]:
+
         self._flush_buffer()
 
-        # Clean empty clauses.
         cleaned: List[Clause] = []
 
         for clause in self.clauses:
-            clause.text_parts = [
-                part for part in clause.text_parts
+
+            clause.original_text_parts = [
+                part
+                for part in clause.original_text_parts
                 if part.strip()
             ]
 
-            if clause.text_parts:
+            clause.processed_text_parts = [
+                part
+                for part in clause.processed_text_parts
+                if part.strip()
+            ]
+
+            if clause.processed_text_parts:
                 cleaned.append(clause)
 
         self.clauses = cleaned
 
-        # A pending container with no child should remain a legitimate clause.
-        return [clause.to_dict() for clause in self.clauses]
+        return [
+            clause.to_dict()
+            for clause in self.clauses
+        ]
 
 
 # ============================================================================
 # Input validation
 # ============================================================================
 
-def _validate_document(document: Any) -> Tuple[bool, str]:
+def _validate_document(
+    document: Any,
+) -> Tuple[bool, str]:
+
     if not isinstance(document, dict):
-        return False, "Input document must be a JSON object."
+        return (
+            False,
+            "Input document must be a JSON object.",
+        )
 
     if "language" not in document:
-        return False, "Missing required field: language."
+        return (
+            False,
+            "Missing required field: language.",
+        )
 
-    if not isinstance(document["language"], str):
-        return False, "Field 'language' must be a string."
+    if not isinstance(
+        document["language"],
+        str,
+    ):
+        return (
+            False,
+            "Field 'language' must be a string.",
+        )
 
     if "pages" not in document:
-        return False, "Missing required field: pages."
+        return (
+            False,
+            "Missing required field: pages.",
+        )
 
-    if not isinstance(document["pages"], list):
-        return False, "Field 'pages' must be a list."
+    if not isinstance(
+        document["pages"],
+        list,
+    ):
+        return (
+            False,
+            "Field 'pages' must be a list.",
+        )
 
-    for index, page in enumerate(document["pages"]):
+    for index, page in enumerate(
+        document["pages"]
+    ):
+
         if not isinstance(page, dict):
-            return False, f"Page {index} must be an object."
+            return (
+                False,
+                f"Page {index} must be an object.",
+            )
 
-        if "page" not in page:
-            return False, f"Page {index} is missing field 'page'."
+        required_fields = {
+            "page",
+            "original_text",
+            "processed_text",
+        }
 
-        if "text" not in page:
-            return False, f"Page {index} is missing field 'text'."
+        missing = (
+            required_fields
+            - set(page.keys())
+        )
 
-        if not isinstance(page["text"], str):
-            return False, f"Page {index} field 'text' must be a string."
+        if missing:
+            return (
+                False,
+                f"Page {index} missing fields: "
+                f"{sorted(missing)}",
+            )
 
-        if not isinstance(page["page"], int):
-            return False, f"Page {index} field 'page' must be an integer."
+        if not isinstance(
+            page["page"],
+            int,
+        ):
+            return (
+                False,
+                f"Page {index} field 'page' "
+                "must be an integer.",
+            )
+
+        if not isinstance(
+            page["original_text"],
+            str,
+        ):
+            return (
+                False,
+                f"Page {index} field "
+                "'original_text' must be a string.",
+            )
+
+        if not isinstance(
+            page["processed_text"],
+            str,
+        ):
+            return (
+                False,
+                f"Page {index} field "
+                "'processed_text' must be a string.",
+            )
 
     return True, ""
 
@@ -1181,69 +1608,115 @@ def _validate_document(document: Any) -> Tuple[bool, str]:
 # Output validation
 # ============================================================================
 
-def _validate_output(result: Dict[str, Any]) -> None:
+def _validate_output(
+    result: Dict[str, Any],
+) -> None:
+
     if result.get("status") != "success":
         return
 
     clauses = result.get("clauses")
 
-    if not isinstance(clauses, list):
-        raise ValueError("Output 'clauses' must be a list.")
+    if not isinstance(
+        clauses,
+        list,
+    ):
+        raise ValueError(
+            "Output 'clauses' must be a list."
+        )
+
+    required = {
+        "clause_id",
+        "section",
+        "page",
+        "original_text",
+        "processed_text",
+        "language",
+    }
 
     seen_ids = set()
 
     for clause in clauses:
-        required = {
-            "clause_id",
-            "section",
-            "page",
-            "text",
-            "language",
-        }
 
         if set(clause.keys()) != required:
             raise ValueError(
                 "Clause schema mismatch. "
-                f"Expected {required}, got {set(clause.keys())}."
+                f"Expected {required}, "
+                f"got {set(clause.keys())}."
             )
 
-        if not isinstance(clause["clause_id"], str):
-            raise ValueError("clause_id must be a string.")
+        clause_id = clause["clause_id"]
 
-        if clause["clause_id"] in seen_ids:
+        if not isinstance(
+            clause_id,
+            str,
+        ):
             raise ValueError(
-                f"Duplicate clause_id detected: {clause['clause_id']}"
+                "clause_id must be a string."
             )
 
-        seen_ids.add(clause["clause_id"])
+        if clause_id in seen_ids:
+            raise ValueError(
+                f"Duplicate clause_id detected: "
+                f"{clause_id}"
+            )
 
-        if not isinstance(clause["section"], str):
-            raise ValueError("section must be a string.")
+        seen_ids.add(clause_id)
 
-        if not isinstance(clause["page"], int):
-            raise ValueError("page must be an integer.")
+        if not isinstance(
+            clause["section"],
+            str,
+        ):
+            raise ValueError(
+                "section must be a string."
+            )
 
-        if not isinstance(clause["text"], str):
-            raise ValueError("text must be a string.")
+        if not isinstance(
+            clause["page"],
+            int,
+        ):
+            raise ValueError(
+                "page must be an integer."
+            )
 
-        if not isinstance(clause["language"], str):
-            raise ValueError("language must be a string.")
+        if not isinstance(
+            clause["original_text"],
+            str,
+        ):
+            raise ValueError(
+                "original_text must be a string."
+            )
+
+        if not isinstance(
+            clause["processed_text"],
+            str,
+        ):
+            raise ValueError(
+                "processed_text must be a string."
+            )
+
+        if not isinstance(
+            clause["language"],
+            str,
+        ):
+            raise ValueError(
+                "language must be a string."
+            )
 
 
 # ============================================================================
 # Public API
 # ============================================================================
 
-def segment_contract(document: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Segment a contract into clause objects.
-
-    The function never raises ordinary processing errors to the caller.
-    Failures are represented using the project's standard error schema.
-    """
+def segment_contract(
+    document: Dict[str, Any],
+) -> Dict[str, Any]:
 
     try:
-        valid, error_message = _validate_document(document)
+
+        valid, error_message = (
+            _validate_document(document)
+        )
 
         if not valid:
             return {
@@ -1252,22 +1725,21 @@ def segment_contract(document: Dict[str, Any]) -> Dict[str, Any]:
                 "message": error_message,
             }
 
-        language = document["language"]
+        engine = _SegmentationEngine(
+            document["language"]
+        )
 
-        engine = _SegmentationEngine(language)
-
-        # Process pages in supplied order.
         for page in document["pages"]:
+
             engine.process_page(
                 page_number=page["page"],
-                text=page["text"],
+                original_text=page["original_text"],
+                processed_text=page["processed_text"],
             )
-
-        clauses = engine.finalize()
 
         result = {
             "status": "success",
-            "clauses": clauses,
+            "clauses": engine.finalize(),
         }
 
         _validate_output(result)
@@ -1275,6 +1747,7 @@ def segment_contract(document: Dict[str, Any]) -> Dict[str, Any]:
         return result
 
     except Exception as exc:
+
         return {
             "status": "error",
             "error_code": ERROR_CODE,
@@ -1287,54 +1760,80 @@ def segment_contract(document: Dict[str, Any]) -> Dict[str, Any]:
 # ============================================================================
 
 def _main() -> int:
-    """
-    CLI usage:
-
-        python segmenter.py sample_input.json
-    """
 
     if len(sys.argv) != 2:
+
         print(
             "Usage: python segmenter.py <input.json>",
             file=sys.stderr,
         )
+
         return 1
 
     input_path = sys.argv[1]
 
     try:
-        with open(input_path, "r", encoding="utf-8") as file:
+
+        with open(
+            input_path,
+            "r",
+            encoding="utf-8",
+        ) as file:
+
             document = json.load(file)
+
     except FileNotFoundError:
+
         print(
             json.dumps(
                 {
                     "status": "error",
                     "error_code": ERROR_CODE,
-                    "message": f"Input file not found: {input_path}",
+                    "message": (
+                        f"Input file not found: "
+                        f"{input_path}"
+                    ),
                 },
                 indent=2,
             )
         )
+
         return 1
+
     except json.JSONDecodeError as exc:
+
         print(
             json.dumps(
                 {
                     "status": "error",
                     "error_code": ERROR_CODE,
-                    "message": f"Invalid JSON: {exc}",
+                    "message": (
+                        f"Invalid JSON: {exc}"
+                    ),
                 },
                 indent=2,
             )
         )
+
         return 1
 
-    result = segment_contract(document)
+    result = segment_contract(
+        document
+    )
 
-    print(json.dumps(result, indent=2, ensure_ascii=False))
+    print(
+        json.dumps(
+            result,
+            indent=2,
+            ensure_ascii=False,
+        )
+    )
 
-    return 0 if result.get("status") == "success" else 1
+    return (
+        0
+        if result.get("status") == "success"
+        else 1
+    )
 
 
 if __name__ == "__main__":
