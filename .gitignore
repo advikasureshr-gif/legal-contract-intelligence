@@ -219,3 +219,6 @@ __marimo__/
 
 # Trained model artifacts
 models/
+
+Datasets/processed/risk_dataset/
+Datasets/processed/risk_features/
