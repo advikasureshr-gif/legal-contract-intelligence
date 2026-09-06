@@ -10,9 +10,8 @@ import joblib
 # Configuration
 # ============================================================
 
-# This will point to the trained XLM-R model once it is
-# transferred from Computer 1.
-MODEL_PATH = "models/clause_classifier"
+# Best-performing fine-tuned XLM-R model
+MODEL_PATH = "models/clause_classifier_weighted"
 
 DATASET_PATH = "Datasets/processed/risk_dataset"
 
@@ -20,9 +19,8 @@ OUTPUT_DIR = "Datasets/processed/risk_features"
 
 MAX_LENGTH = 256
 
-# Start small while testing.
-# Later we will process the complete splits.
-TEST_EXAMPLES = 20
+# Adjust depending on available RAM.
+BATCH_SIZE = 8
 
 
 # ============================================================
@@ -33,7 +31,9 @@ def load_model():
 
     print("Loading XLM-R model...")
 
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
+    tokenizer = AutoTokenizer.from_pretrained(
+        MODEL_PATH
+    )
 
     model = AutoModelForSequenceClassification.from_pretrained(
         MODEL_PATH
@@ -48,20 +48,38 @@ def load_model():
 # Extract features
 # ============================================================
 
-def extract_features(texts, tokenizer, model):
+def extract_features(
+    texts,
+    tokenizer,
+    model,
+    split_name
+):
 
     all_probabilities = []
     all_embeddings = []
     all_predictions = []
 
-    for i, text in enumerate(texts):
+    total = len(texts)
+
+    print()
+    print(f"Extracting features for {split_name}...")
+    print(f"Total examples: {total}")
+
+    for start in range(0, total, BATCH_SIZE):
+
+        end = min(
+            start + BATCH_SIZE,
+            total
+        )
+
+        batch_texts = texts[start:end]
 
         inputs = tokenizer(
-            text,
+            batch_texts,
             return_tensors="pt",
             truncation=True,
             max_length=MAX_LENGTH,
-            padding=False,
+            padding=True,
         )
 
         with torch.no_grad():
@@ -78,45 +96,113 @@ def extract_features(texts, tokenizer, model):
         probabilities = torch.softmax(
             outputs.logits,
             dim=-1
-        )[0]
+        )
 
         # ----------------------------------------------------
         # Predicted class
         # ----------------------------------------------------
 
-        prediction = torch.argmax(
-            probabilities
-        ).item()
+        predictions = torch.argmax(
+            probabilities,
+            dim=-1
+        )
 
         # ----------------------------------------------------
         # XLM-R representation
         #
-        # Use the CLS/token-0 representation from the final
+        # Use token-0 representation from the final
         # hidden layer.
         # ----------------------------------------------------
 
         last_hidden_state = outputs.hidden_states[-1]
 
-        embedding = last_hidden_state[:, 0, :][0]
+        embeddings = last_hidden_state[:, 0, :]
 
         all_probabilities.append(
             probabilities.cpu().numpy()
         )
 
         all_embeddings.append(
-            embedding.cpu().numpy()
+            embeddings.cpu().numpy()
         )
 
-        all_predictions.append(prediction)
+        all_predictions.append(
+            predictions.cpu().numpy()
+        )
 
-        if (i + 1) % 5 == 0:
-            print(f"  Processed {i + 1}/{len(texts)}")
+        processed = end
+
+        print(
+            f"  Processed {processed}/{total}"
+        )
 
     return (
-        np.array(all_probabilities),
-        np.array(all_embeddings),
-        np.array(all_predictions),
+        np.concatenate(all_probabilities, axis=0),
+        np.concatenate(all_embeddings, axis=0),
+        np.concatenate(all_predictions, axis=0),
     )
+
+
+# ============================================================
+# Process one split
+# ============================================================
+
+def process_split(
+    dataset_split,
+    split_name,
+    tokenizer,
+    model,
+    output_dir
+):
+
+    texts = dataset_split["text"]
+
+    probabilities, embeddings, predictions = extract_features(
+        texts,
+        tokenizer,
+        model,
+        split_name
+    )
+
+    results = {
+        "texts": texts,
+        "ground_truth_unfair": np.array(
+            dataset_split["is_unfair"]
+        ),
+        "unfair_labels": dataset_split["unfair_labels"],
+        "predictions": predictions,
+        "probabilities": probabilities,
+        "embeddings": embeddings,
+    }
+
+    output_file = (
+        output_dir /
+        f"{split_name}_xlmr_features.joblib"
+    )
+
+    joblib.dump(
+        results,
+        output_file
+    )
+
+    print(
+        f"Saved {split_name} features to: "
+        f"{output_file}"
+    )
+
+    print(
+        f"  Embeddings shape:    {embeddings.shape}"
+    )
+
+    print(
+        f"  Probabilities shape: {probabilities.shape}"
+    )
+
+    print(
+        f"  Predictions shape:   {predictions.shape}"
+    )
+
+    return results
 
 
 # ============================================================
@@ -131,15 +217,19 @@ def main():
 
     print("Loading risk dataset...")
 
-    dataset = load_from_disk(DATASET_PATH)
-
-    test_data = dataset["test"].select(
-        range(min(TEST_EXAMPLES, len(dataset["test"])))
+    dataset = load_from_disk(
+        DATASET_PATH
     )
 
-    texts = test_data["text"]
+    print()
+    print("Dataset sizes:")
 
-    print(f"Using {len(texts)} examples for inspection.")
+    for split in ["train", "validation", "test"]:
+
+        print(
+            f"  {split.capitalize():10s}: "
+            f"{len(dataset[split])}"
+        )
 
     # --------------------------------------------------------
     # Load XLM-R
@@ -147,117 +237,54 @@ def main():
 
     tokenizer, model = load_model()
 
+    print()
     print(
         f"Number of model labels: "
         f"{model.config.num_labels}"
     )
 
-    print()
-
     # --------------------------------------------------------
-    # Extract
+    # Prepare output directory
     # --------------------------------------------------------
 
-    probabilities, embeddings, predictions = extract_features(
-        texts,
-        tokenizer,
-        model
+    output_dir = Path(
+        OUTPUT_DIR
     )
 
-    # --------------------------------------------------------
-    # Inspect
-    # --------------------------------------------------------
-
-    id2label = model.config.id2label
-
-    print()
-    print("=" * 70)
-    print("XLM-R FEATURE INSPECTION")
-    print("=" * 70)
-
-    for i in range(len(texts)):
-
-        predicted_index = predictions[i]
-        predicted_label = id2label[predicted_index]
-
-        top_indices = np.argsort(
-            probabilities[i]
-        )[::-1][:5]
-
-        print()
-        print(f"EXAMPLE {i + 1}")
-        print("-" * 70)
-
-        print("Text:")
-        print(texts[i][:500])
-
-        print()
-
-        print(
-            "UNFAIR-ToS labels:",
-            test_data[i]["unfair_labels"]
-        )
-
-        print()
-
-        print(
-            "XLM-R predicted label:",
-            predicted_label
-        )
-
-        print()
-
-        print("Top 5 probabilities:")
-
-        for index in top_indices:
-
-            print(
-                f"  {id2label[index]:45s}"
-                f" {probabilities[i][index]:.4f}"
-            )
-
-        print()
-
-        print(
-            "Embedding dimension:",
-            embeddings[i].shape
-        )
-
-    # --------------------------------------------------------
-    # Save inspection results
-    # --------------------------------------------------------
-
-    output_dir = Path(OUTPUT_DIR)
     output_dir.mkdir(
         parents=True,
         exist_ok=True
     )
 
-    results = {
-        "texts": texts,
-        "ground_truth_labels": test_data["unfair_labels"],
-        "predictions": predictions,
-        "probabilities": probabilities,
-        "embeddings": embeddings,
-    }
+    # --------------------------------------------------------
+    # Extract all splits
+    # --------------------------------------------------------
 
-    output_file = (
-        output_dir /
-        "xlmr_feature_inspection.joblib"
-    )
+    for split_name in [
+        "train",
+        "validation",
+        "test"
+    ]:
 
-    joblib.dump(
-        results,
-        output_file
-    )
+        process_split(
+            dataset[split_name],
+            split_name,
+            tokenizer,
+            model,
+            output_dir
+        )
+
+    # --------------------------------------------------------
+    # Complete
+    # --------------------------------------------------------
 
     print()
     print("=" * 70)
-    print("FEATURE EXTRACTION COMPLETE")
+    print("XLM-R FEATURE EXTRACTION COMPLETE")
     print("=" * 70)
 
     print(
-        f"Saved to: {output_file}"
+        f"Features saved to: {OUTPUT_DIR}"
     )
 
 
