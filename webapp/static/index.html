@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Contract Intelligence</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%234f46e5'/%3E%3Cpath d='M16 7l7 4.5v9L16 25l-7-4.5v-9z' fill='none' stroke='white' stroke-width='2' stroke-linejoin='round'/%3E%3C/svg%3E" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 32 32" width="26" height="26">
+          <path d="M16 4l10 6v12l-10 6-10-6V10z" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/>
+          <path d="M16 4v24M6 10l10 6 10-6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round" opacity="0.55"/>
+        </svg>
+      </span>
+      <div class="brand-text">
+        <strong>Contract Intelligence</strong>
+        <span>Clause &amp; risk analysis</span>
+      </div>
+    </div>
+    <div class="status-pill" id="status-pill" title="Pipeline status">
+      <span class="dot"></span><span id="status-text">checking</span>
+    </div>
+  </header>
+
+  <main>
+    <!-- ============ UPLOAD ============ -->
+    <section id="view-upload" class="view">
+      <div class="upload-wrap">
+        <h1>Analyse a contract</h1>
+        <p class="lede">
+          Upload a contract to extract its text, segment it into clauses,
+          classify each clause, and surface potentially unfair provisions.
+        </p>
+
+        <div id="dropzone" class="dropzone" tabindex="0" role="button"
+             aria-label="Upload a contract file">
+          <span class="dz-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 15V4M8 8l4-4 4 4M5 15v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3"/>
+            </svg>
+          </span>
+          <p class="dz-primary">Drop a file here, or <span class="link">browse</span></p>
+          <p class="dz-secondary">PDF, DOCX or TXT &nbsp;·&nbsp; up to 30&nbsp;MB</p>
+          <input type="file" id="file-input" accept=".pdf,.docx,.txt" hidden />
+        </div>
+
+        <div id="file-chip" class="file-chip" hidden>
+          <span class="fc-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14 3v5h5M7 3h8l5 5v12a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/>
+            </svg>
+          </span>
+          <span id="file-name" class="fc-name">—</span>
+          <button type="button" id="file-clear" aria-label="Remove file">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+          </button>
+        </div>
+
+        <button id="analyze-btn" class="btn-primary" disabled>Analyse contract</button>
+        <p id="upload-error" class="inline-error" hidden></p>
+
+        <ol class="pipeline-steps" aria-hidden="true">
+          <li><span>1</span>Extract text</li>
+          <li><span>2</span>Segment clauses</li>
+          <li><span>3</span>Classify type</li>
+          <li><span>4</span>Score risk</li>
+        </ol>
+
+        <p class="demo-note" id="demo-note" hidden>
+          <strong>Demo mode.</strong> Clause types and risk are produced by a
+          lightweight heuristic because the trained models were not found.
+          Text extraction and clause segmentation still run for real.
+        </p>
+      </div>
+    </section>
+
+    <!-- ============ LOADING ============ -->
+    <section id="view-loading" class="view" hidden>
+      <div class="loader">
+        <div class="loader-bar"><span id="loader-fill"></span></div>
+        <p id="loading-step">Extracting document text…</p>
+      </div>
+    </section>
+
+    <!-- ============ RESULTS ============ -->
+    <section id="view-results" class="view" hidden>
+      <div class="results-head">
+        <div class="rh-title">
+          <h2 id="res-doc-name">contract.pdf</h2>
+          <div class="meta-row" id="res-meta"></div>
+        </div>
+        <div class="results-actions">
+          <button id="btn-new" class="btn-ghost">New analysis</button>
+          <button id="btn-export" class="btn-ghost">Export JSON</button>
+          <button id="btn-print" class="btn-ghost">Print</button>
+        </div>
+      </div>
+
+      <div class="stat-grid">
+        <div class="stat-tile">
+          <span class="stat-label">Clauses</span>
+          <span class="stat-value" id="stat-clauses">0</span>
+          <span class="stat-sub" id="stat-pages">0 pages</span>
+        </div>
+        <div class="stat-tile">
+          <span class="stat-label">Flagged</span>
+          <span class="stat-value" id="stat-flagged">0</span>
+          <span class="stat-sub" id="stat-flagged-sub">0% of clauses</span>
+        </div>
+        <div class="stat-tile">
+          <span class="stat-label">Avg. type confidence</span>
+          <span class="stat-value" id="stat-conf">0%</span>
+          <span class="stat-sub" id="stat-lang">language —</span>
+        </div>
+      </div>
+
+      <div class="panel-row">
+        <div class="panel">
+          <span class="panel-label">Risk distribution</span>
+          <div class="risk-meter" id="risk-meter"></div>
+          <div class="risk-legend" id="risk-legend"></div>
+        </div>
+        <div class="panel">
+          <span class="panel-label">Most common clause types</span>
+          <div class="type-bars" id="type-bars"></div>
+        </div>
+      </div>
+
+      <div class="toolbar">
+        <div class="search-box">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+          <input type="search" id="search" placeholder="Search clause text, section or ID" />
+        </div>
+        <select id="filter-type"><option value="">All clause types</option></select>
+        <div class="segmented" id="filter-risk" role="group" aria-label="Filter by risk">
+          <button data-risk="all" class="active">All</button>
+          <button data-risk="UNFAIR">Flagged</button>
+          <button data-risk="FAIR">Standard</button>
+        </div>
+        <span class="result-count" id="result-count"></span>
+      </div>
+
+      <ol class="clause-list" id="clause-list"></ol>
+      <p class="empty-state" id="empty-state" hidden>No clauses match the current filters.</p>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    Decision-support tool for contract review — not a substitute for advice
+    from a qualified legal professional.
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
