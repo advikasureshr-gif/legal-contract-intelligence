@@ -449,15 +449,68 @@ main { max-width: var(--maxw); margin: 0 auto; padding: 44px 24px 72px; }
 
 .risk-badge {
   margin-left: auto;
-  display: inline-flex; align-items: center; gap: 6px;
-  padding: 4px 10px; border-radius: 999px;
-  font-size: 11.5px; font-weight: 600; font-variant-numeric: tabular-nums;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
-.risk-badge .rb-dot { width: 6px; height: 6px; border-radius: 50%; }
-.risk-badge.unfair { background: var(--flag-soft); color: var(--flag); border: 1px solid var(--flag-border); }
-.risk-badge.unfair .rb-dot { background: var(--flag-strong); }
-.risk-badge.fair { background: var(--surface-3); color: var(--text-muted); border: 1px solid var(--border-2); }
-.risk-badge.fair .rb-dot { background: var(--ok-strong); }
+
+.risk-badge .rb-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+/* Low risk */
+.risk-badge.low {
+  background: var(--ok-soft);
+  color: var(--ok);
+  border: 1px solid color-mix(in srgb, var(--ok) 25%, var(--border-2));
+}
+
+.risk-badge.low .rb-dot {
+  background: var(--ok-strong);
+}
+
+/* Medium risk */
+.risk-badge.medium {
+  background: var(--flag-soft);
+  color: var(--flag);
+  border: 1px solid var(--flag-border);
+}
+
+.risk-badge.medium .rb-dot {
+  background: var(--flag-strong);
+}
+
+/* High risk */
+.risk-badge.high {
+  background: #fef2f2;
+  color: #b91c1c;
+  border: 1px solid #fecaca;
+}
+
+.risk-badge.high .rb-dot {
+  background: #dc2626;
+}
+
+/* FAIR / UNFAIR status */
+.risk-status {
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.risk-status.fair {
+  color: var(--ok);
+}
+
+.risk-status.unfair {
+  color: var(--flag-strong);
+}
 
 .risk-reasons { width: 100%; margin: 2px 0 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 5px; }
 .risk-reasons li {
