@@ -19,7 +19,10 @@
 
   let selectedFile = null;
   let report = null;
-  const state = { search: "", type: "", risk: "all" };
+  let translatedTexts = {};
+  let selectedLanguage = "en";
+
+  const state = { search: "", type: "", risk: "all" };;
 
   function showView(name) {
     for (const k of Object.keys(views)) views[k].hidden = k !== name;
@@ -170,7 +173,44 @@
   /* ---------- helpers ---------- */
 
   const pct = (x) => Math.round(x * 100) + "%";
+  async function translateReport(targetLanguage) {
+  if (!report || targetLanguage === "en") {
+    translatedTexts = {};
+    selectedLanguage = "en";
+    renderList();
+    return;
+  }
 
+  const texts = report.clauses.map(
+    (c) => c.original_text || c.processed_text || ""
+  );
+
+  const res = await fetch("/api/translate", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      texts,
+      target_language: targetLanguage,
+    }),
+  });
+
+  const data = await res.json();
+
+  if (data.status !== "success") {
+    throw new Error(data.message || data.error || "Translation failed.");
+  }
+
+  translatedTexts = {};
+
+  report.clauses.forEach((c, index) => {
+    translatedTexts[c.clause_id] = data.translations[index] || "";
+  });
+
+  selectedLanguage = targetLanguage;
+  renderList();
+}
   const prettyType = (t) =>
     t
       .toLowerCase()
@@ -352,7 +392,11 @@
     list.innerHTML = visible
       .map((c) => {
         const unfair = c.risk_label === "UNFAIR";
-        const text = c.original_text || c.processed_text || "";
+        const originalText = c.original_text || c.processed_text || "";
+        const text =
+          selectedLanguage === "en"
+          ? originalText
+          : translatedTexts[c.clause_id] || originalText;
         const long = text.length > 300;
 
         const probability = Number(c.risk_probability) || 0;
@@ -426,7 +470,21 @@
     state.type = e.target.value;
     renderList();
   });
+  /*$("#output-language").addEventListener("change", async (e) => {
+  const language = e.target.value;
 
+  try {
+    e.target.disabled = true;
+
+    await translateReport(language);
+  } catch (err) {
+    console.error("Translation failed:", err);
+    alert("Could not translate the results. Please try again.");
+    e.target.value = selectedLanguage;
+  } finally {
+    e.target.disabled = false;
+  }
+});*/
   $("#filter-risk").addEventListener("click", (e) => {
     const btn = e.target.closest("button");
     if (!btn) return;

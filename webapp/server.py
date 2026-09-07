@@ -77,6 +77,31 @@ _engine = None
 _engine_lock = threading.Lock()
 _engine_error: str | None = None
 
+_translator = None
+_translator_lock = threading.Lock()
+_translator_error: str | None = None
+
+
+def get_translator():
+    """Load the NLLB translator once, lazily."""
+    global _translator, _translator_error
+
+    if _translator is not None or _translator_error is not None:
+        return _translator
+
+    with _translator_lock:
+        if _translator is not None or _translator_error is not None:
+            return _translator
+
+        try:
+            from translation.translator import NLLBTranslator
+
+            _translator = NLLBTranslator()
+        except Exception as exc:
+            _translator_error = f"{type(exc).__name__}: {exc}"
+            print("[webapp] Translator unavailable ->", _translator_error)
+
+    return _translator
 
 def models_present() -> bool:
     return CLAUSE_MODEL_DIR.is_dir() and RISK_MODEL_FILE.is_file()
@@ -475,9 +500,108 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         self._send_json({"error": "Not found"}, status=404)
+    def handle_translate(self) -> None:
+        """Translate a batch of English texts for presentation."""
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            length = 0
 
+        if length <= 0:
+            self._send_json({"error": "Empty request."}, status=400)
+            return
+
+        if length > 2 * 1024 * 1024:
+            self._send_json(
+                {"error": "Translation request too large."},
+                status=413,
+            )
+            return
+
+        try:
+            body = self.rfile.read(length)
+            payload = json.loads(body.decode("utf-8"))
+
+            texts = payload.get("texts", [])
+            target_language = payload.get("target_language", "en")
+
+            if not isinstance(texts, list):
+                self._send_json(
+                    {"error": "'texts' must be a list."},
+                    status=400,
+                )
+                return
+
+            if target_language not in {"en", "hi", "ta"}:
+                self._send_json(
+                    {"error": "Unsupported target language."},
+                    status=400,
+                )
+                return
+
+            if not texts:
+                self._send_json(
+                    {
+                        "status": "success",
+                        "target_language": target_language,
+                        "translations": [],
+                    }
+                )
+                return
+
+            if target_language == "en":
+                translations = texts
+            else:
+                translator = get_translator()
+
+                if translator is None:
+                    self._send_json(
+                        {
+                            "status": "error",
+                            "message": (
+                                "Translation model unavailable: "
+                                + str(_translator_error)
+                            ),
+                        },
+                        status=500,
+                    )
+                    return
+
+                translations = translator.translate_many(
+                    texts,
+                    target_language,
+                    batch_size=4,
+                )
+
+            self._send_json(
+                {
+                    "status": "success",
+                    "target_language": target_language,
+                    "translations": translations,
+                }
+            )
+
+        except json.JSONDecodeError:
+            self._send_json(
+                {"error": "Invalid JSON request."},
+                status=400,
+            )
+        except Exception as exc:
+            traceback.print_exc()
+            self._send_json(
+                {
+                    "status": "error",
+                    "message": str(exc),
+                },
+                status=500,
+            )
     def do_POST(self) -> None:  # noqa: N802
         route = self.path.split("?", 1)[0]
+
+        if route == "/api/translate":
+            self.handle_translate()
+            return
+
         if route != "/api/analyze":
             self._send_json({"error": "Not found"}, status=404)
             return
