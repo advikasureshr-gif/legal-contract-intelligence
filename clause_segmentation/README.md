@@ -1,78 +1,387 @@
 # Clause Segmentation
 
-Standalone module for the multilingual Legal Contract Risk Analysis
-pipeline. This module owns exactly one responsibility:
+This is a standalone module in the multilingual Legal Contract Risk Analysis project.
 
-> Turn a page-structured contract into an ordered list of clause objects.
+Its job is simple:
 
-It does **not** do language detection, classification, risk scoring,
-XLM-RoBERTa representation, or UI work — those are downstream modules.
+> Take the contract text and split it into separate clauses in the correct order.
+
+This module only handles **clause segmentation**. It does not do language detection, clause classification, risk scoring, XLM-RoBERTa processing, or UI work.
+
+---
 
 ## Purpose
 
-`segment_contract(document)` takes a contract that has already been
-extracted and (optionally) split by page, and returns a deterministic list
-of clause objects following the team's agreed schema. It is a first,
-rule-based + regex version, in line with the project specification. A
-future sequence-labeling model can be slotted in later without changing
-the public API.
+`segment_contract(document)` takes a contract that has already been extracted and cleaned, and splits it into a list of clause objects.
+
+For example, if the contract contains:
+
+```text
+1. General Terms
+
+1.1 The company agrees to provide the services.
+
+1.2 The customer agrees to make the payment.
+
+2. Confidentiality
+
+The parties agree to keep all information confidential.
+```
+
+The module identifies `1.1`, `1.2`, and `2` as clause/section markers and keeps the text belonging to each one together.
+
+The current version uses **rules and regular expressions (regex)**.&#x20;
+
+The main goal is to make the output consistent and predictable.
+
+---
 
 ## Architecture
 
-```
+The module follows these steps:
+
+```text
 Input validation
       ↓
-Page normalization (CRLF/tabs, page-marker artifact stripping)
+Clean and normalize the page text
       ↓
-Line stream construction (pages -> flat line sequence, page
-transitions treated like paragraph breaks, never like clause breaks)
+Combine the lines from all pages
       ↓
-Structural detection (regex) — ARTICLE / SECTION / numeric / recital /
-list markers / heading heuristics
+Find possible clause markers
       ↓
-Rule-based decision layer — is this detected marker a real clause
-boundary, a section/heading update, a list item that stays with its
-parent, or plain continuation text?
+Decide whether each marker is actually a new clause
       ↓
-Hierarchy / container resolution — a bare top-level numeric heading
-("1. ESTABLISHMENT OF DISTRIBUTORSHIP") that is immediately followed by
-its own numbered children ("1.1", "1.2", ...) is treated as a section
-label, not as a clause of its own
+Handle headings and parent/child clause relationships
       ↓
-Clause construction & output validation
+Build the final clause objects
+      ↓
+Check the output
 ```
 
-Regex is used **only** for detection (recognizing that a line looks like
-`1.1`, `ARTICLE IV`, `(A)`, etc.). Whether a detected pattern actually
-becomes a clause boundary is a separate rule-based decision, so the rule
-layer can also recognize obvious boundaries (e.g. isolated ALL-CAPS
-headings) that no single regex is responsible for.
+### 1. Input validation
 
-Internally, detections carry a `Priority` of `STRONG` / `MEDIUM` / `WEAK`
-purely to document how much the engine trusts a given kind of match
-(explicit numbering vs. a parenthetical list vs. a heuristic heading).
-This is **never** exposed as a numeric confidence score in the output.
+First, the module checks whether the input has the required fields and whether the values are of the correct type.
+
+For example, it checks things like:
+
+- Is there a document?
+- Are pages present?
+- Does every page have text?
+- Is the page number valid?
+
+If something is wrong, the module returns an error instead of crashing.
+
+### 2. Page normalization
+
+The extracted text may contain things that are not actually part of the contract, such as:
+
+```text
+Page -2-
+```
+
+or
+
+```text
+-2-
+```
+
+These page markers are removed.
+
+Tabs and different line-ending formats are also cleaned so that the text is handled consistently.
+
+### 3. Line stream construction
+
+The pages are then treated as one continuous sequence of lines.
+
+For example:
+
+```text
+Page 1:
+1.1 The company agrees to provide the service.
+
+Page 2:
+The service will continue for one year.
+
+Page 3:
+1.2 The customer will make the payment.
+```
+
+The text from page 2 is treated as a continuation of `1.1`.
+
+**A page change does not automatically mean that a new clause has started.**
+
+### 4. Structural detection
+
+The module looks for patterns that could indicate a new clause or heading.
+
+For example:
+
+```text
+1.
+1.1
+2.1.3
+ARTICLE IV
+SECTION 3.1
+A.
+(A)
+CONFIDENTIALITY
+```
+
+Regex is mainly used here to recognize what a line **looks like**.
+
+For example, regex can recognize that:
+
+```text
+1.2 Payment Terms
+```
+
+looks like a numbered clause.
+
+But just because something matches a regex does **not** mean that it automatically becomes a new clause.
+
+### 5. Rule-based decision
+
+After finding a possible marker, the rules decide what it actually means.
+
+For example:
+
+```text
+1.2 Payment Terms
+```
+
+can be treated as a clause.
+
+But:
+
+```text
+The payment is due within 1.2 days.
+```
+
+should not become a new clause just because `1.2` appears in the text.
+
+The rules also decide whether something is:
+
+- a new clause
+- a section or heading
+- a list item belonging to the current clause
+- normal continuation text
+
+### 6. Hierarchy and headings
+
+The module also handles cases where one heading contains smaller clauses.
+
+For example:
+
+```text
+1. ESTABLISHMENT OF DISTRIBUTORSHIP
+
+1.1 Appointment of Distributor
+1.2 Territory
+1.3 Term
+```
+
+Here, `1. ESTABLISHMENT OF DISTRIBUTORSHIP` is treated as the **section heading**, while `1.1`, `1.2`, and `1.3` are the actual child clauses.
+
+This prevents the section heading from being incorrectly treated as a separate clause.
+
+### 7. Clause construction and output validation
+
+Finally, the module creates the clause objects using the agreed output format and checks that the output is valid.
+
+---
+
+## How regex and rules work together
+
+Regex is only used to **find possible patterns**.
+
+For example, regex can recognize:
+
+```text
+1.1 Payment Terms
+```
+
+as something that looks like a numbered clause.
+
+The rule system then decides whether it should actually start a new clause.
+
+So the process is:
+
+```text
+Regex → "This looks like a clause marker."
+
+Rules → "Yes, this is a new clause."
+        OR
+        "No, this is just normal text/list text."
+```
+
+The module also has three internal priority levels:
+
+- `STRONG` — patterns that are usually very reliable, such as clear clause numbering
+- `MEDIUM` — patterns that are useful but need more checking
+- `WEAK` — patterns based more on headings or other clues
+
+These priorities are only used internally. They are **not** returned as a confidence score.
+
+---
 
 ## Supported structures
 
-- Numbered clauses: `1.`, `2.`, `10.`
-- Nested numbered clauses: `1.1`, `1.2`, `2.1.3`
-- `ARTICLE I` / `ARTICLE IV` / `ARTICLE 4`
-- `SECTION 1` / `SECTION 3.1`
-- Recital-style lettered paragraphs before the first numbered clause
-  (`A.`, `B.`, `C.`)
-- Parenthetical lists: `(A)(B)(C)`, `(a)(b)(c)`, `(i)(ii)(iii)` — always
-  kept attached to their parent clause, never promoted to top-level
-  clauses
-- Standalone heading lines (`CONFIDENTIALITY`, `Intellectual Property`)
-- Continuation paragraphs (unmarked body text that belongs to the
-  preceding clause)
-- Page-spanning clauses, with page-marker artifacts (`Page -2-`, `-2-`)
-  stripped before they can pollute clause text
-- Section/heading context that persists until the next heading or
-  container is encountered
+The module currently supports the following types of contract structures.
+
+### Numbered clauses
+
+```text
+1. Definitions
+2. Payment
+10. Termination
+```
+
+### Nested numbered clauses
+
+```text
+1.1
+1.2
+2.1.3
+```
+
+These can be used when a clause has smaller clauses inside it.
+
+### Articles
+
+```text
+ARTICLE I
+ARTICLE IV
+ARTICLE 4
+```
+
+### Sections
+
+```text
+SECTION 1
+SECTION 3.1
+```
+
+### Lettered paragraphs before numbered clauses
+
+Some contracts start with lettered paragraphs:
+
+```text
+A. The parties agree...
+B. The company shall...
+C. The customer shall...
+```
+
+These are supported when they appear before the first numbered clause.
+
+### Parenthetical lists
+
+Lists inside a clause are supported:
+
+```text
+(A) First condition
+(B) Second condition
+(C) Third condition
+```
+
+and:
+
+```text
+(a) First item
+(b) Second item
+(c) Third item
+```
+
+and:
+
+```text
+(i) First item
+(ii) Second item
+(iii) Third item
+```
+
+These stay attached to their parent clause.
+
+For example:
+
+```text
+1. Responsibilities
+
+(A) The company must provide the service.
+(B) The company must maintain the system.
+```
+
+`(A)` and `(B)` do **not** become separate top-level clauses.
+
+### Standalone headings
+
+The module can also recognize headings such as:
+
+```text
+CONFIDENTIALITY
+```
+
+or:
+
+```text
+Intellectual Property
+```
+
+as section/heading information.
+
+### Continuation paragraphs
+
+Not every paragraph starts with a number.
+
+For example:
+
+```text
+1. Payment
+
+The customer must make the payment within 30 days.
+The payment must be made through the approved method.
+```
+
+The second sentence/paragraph is treated as part of the same clause when there is no new clause marker.
+
+### Clauses that continue across pages
+
+A clause can start on one page and continue on another page.
+
+For example:
+
+```text
+Page 1:
+
+1.1 The company agrees to provide the following services...
+```
+
+and then:
+
+```text
+Page 2:
+
+The services will be provided throughout the contract period.
+```
+
+The page change does not automatically create a new clause.
+
+Page-number text such as:
+
+```text
+Page -2-
+```
+
+is removed so that it does not become part of the clause text.
+
+### Section and heading context
+
+If a clause belongs to a section, that section information is kept until another heading or section changes it.
+
+---
 
 ## Input format
+
+The module expects a document in this format:
 
 ```json
 {
@@ -85,10 +394,25 @@ This is **never** exposed as a numeric confidence score in the output.
 }
 ```
 
-`language` is a required, document-level field (this module does not
-detect language; it only preserves whatever value it is given).
+### Important
+
+`language` is required, but this module does **not** detect the language.
+
+For example, if the input says:
+
+```json
+"language": "en"
+```
+
+the module simply keeps `"en"` in the output.
+
+The language detection, if needed, is handled somewhere else in the overall project.
+
+---
 
 ## Output format
+
+If the segmentation is successful, the module returns:
 
 ```json
 {
@@ -105,7 +429,19 @@ detect language; it only preserves whatever value it is given).
 }
 ```
 
+Each clause contains:
+
+- `clause_id` — the clause number or fallback ID
+- `section` — the section/heading it belongs to
+- `page` — the page where the clause starts
+- `text` — the actual clause text
+- `language` — the language given in the input
+
+---
+
 ## Error format
+
+If something goes wrong, the module returns:
 
 ```json
 {
@@ -115,57 +451,179 @@ detect language; it only preserves whatever value it is given).
 }
 ```
 
-`segment_contract` never raises; every failure path (missing document,
-wrong types, missing pages/text, invalid page numbers, empty document,
-or an internal inability to build valid output) is reported through this
-schema.
+`segment_contract` does not raise an exception to the caller.
+
+Instead, errors such as these are returned using the error format:
+
+- missing document
+- wrong input type
+- missing pages
+- missing page text
+- invalid page numbers
+- empty document
+- failure while building valid clause output
+
+This makes it easier for the rest of the project to handle errors.
+
+---
 
 ## Clause ID and fallback ID policy
 
-Existing structural identifiers (`1`, `1.1`, `ARTICLE IV`, `SECTION 3.1`,
-a recital letter like `A`) are always preserved exactly as found and are
-never rewritten. If a paragraph has no structural identifier at all (for
-example, body text that immediately follows a bare heading such as
-`CONFIDENTIALITY`), it is assigned a deterministic fallback id of the
-form `UNSPECIFIED-1`, `UNSPECIFIED-2`, ... in document order. This keeps
-the module from silently discarding meaningful text.
+If the contract already has a clause ID, the module keeps it exactly as it appears.
+
+For example:
+
+```text
+1
+1.1
+ARTICLE IV
+SECTION 3.1
+A
+```
+
+These IDs are not changed or rewritten.
+
+Sometimes a paragraph does not have any ID.
+
+For example:
+
+```text
+CONFIDENTIALITY
+
+The parties agree to keep all information confidential.
+```
+
+If the paragraph has no structural identifier, the module gives it a fallback ID:
+
+```text
+UNSPECIFIED-1
+UNSPECIFIED-2
+UNSPECIFIED-3
+```
+
+The numbers are assigned in document order.
+
+This makes sure that useful text is not lost just because it did not have a clause number.
+
+---
 
 ## Usage
+
+To run the segmenter:
 
 ```bash
 python segmenter.py sample_input.json
 ```
 
-Tests:
+### Tests
+
+To run all clause segmentation tests:
 
 ```bash
 python -m unittest discover -s clause_segmentation -p "test_*.py"
 ```
 
+---
+
 ## Design limitations
 
-This is a deterministic, rule-based first version, not a perfect
-segmenter:
+This is the **first rule-based version** of the module. It is designed to work well with the contract structures we currently expect, but it is not a perfect segmenter.
 
-- Structural detection is line-anchored (a marker must open its own
-  line). This is what keeps things like "The term is 5.2 years." or
-  "See Section 3.1 for details." from being misread as numbering, but it
-  also means a genuine clause number that is not placed at the very
-  start of its own line will be missed.
-- A single-character parenthetical marker that happens to be a roman
-  numeral letter (e.g. `(i)`, `(v)`) is classified as an ordinary
-  lower-case list item rather than a roman numeral, since one letter
-  alone is ambiguous without broader list context.
-- Heading detection is a conservative heuristic (short, standalone,
-  upper/title-case, no terminal sentence punctuation). It intentionally
-  favors under-splitting: when the evidence for a boundary is weak, the
-  module keeps text attached to the previous clause rather than
-  fragmenting it.
-- The "container heading" collapse (e.g. `1. ESTABLISHMENT OF
-  DISTRIBUTORSHIP` folding into a section label instead of its own
-  clause) is deliberately narrow: it only applies to a bare top-level
-  numeric heading that is immediately followed by its own numbered
-  children with no intervening body text.
-- No transformer, embedding, or sequence-labeling model is used. A
-  future model-based fallback could be added behind the same
-  `segment_contract` API without breaking downstream consumers.
+### 1. Clause numbers need to start their own line
+
+The module mainly looks for markers at the beginning of a line.
+
+For example:
+
+```text
+1. Payment Terms
+```
+
+can be detected.
+
+But something like:
+
+```text
+The term is 5.2 years.
+```
+
+should not be treated as a new clause.
+
+Similarly:
+
+```text
+See Section 3.1 for details.
+```
+
+should not be treated as a new `3.1` clause.
+
+The trade-off is that if a real clause number is placed in the middle of a line instead of starting a new line, the module may miss it.
+
+### 2. Single-letter roman numeral lists can be ambiguous
+
+For example:
+
+```text
+(i)
+(v)
+```
+
+can look like either a roman numeral list or a normal lower-case list item.
+
+Because there is not enough information from a single marker alone, the module treats these as ordinary lower-case list items.
+
+When there are several items together, such as:
+
+```text
+(i) First
+(ii) Second
+(iii) Third
+```
+
+the surrounding structure provides more information.
+
+### 3. Heading detection is based on simple rules
+
+The module looks for clues such as:
+
+- short text
+- standalone line
+- upper-case or title-case text
+- no sentence-ending punctuation
+
+For example:
+
+```text
+CONFIDENTIALITY
+```
+
+is likely to be a heading.
+
+If the module is not sure that something is a heading, it prefers to keep it with the previous clause instead of splitting the text incorrectly.
+
+### 4. Section heading handling is limited
+
+The special handling for something like:
+
+```text
+1. ESTABLISHMENT OF DISTRIBUTORSHIP
+1.1 Appointment
+1.2 Territory
+```
+
+only works when the top-level heading is immediately followed by its numbered children.
+
+If there is body text between the heading and the child clauses, the special handling may not apply.
+
+### 5. No AI model is used
+
+The current module does not use:
+
+- transformers
+- embeddings
+- sequence-labeling models
+- XLM-RoBERTa
+
+It is completely based on rules and regex.
+
+In the future, a machine learning model could be added behind the same `segment_contract` function without changing the way other parts of the project use the module.
