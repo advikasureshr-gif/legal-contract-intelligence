@@ -66,7 +66,12 @@ MAX_UPLOAD_BYTES = 30 * 1024 * 1024  # 30 MB
 SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".txt"}
 
 CLAUSE_MODEL_DIR = PROJECT_ROOT / "models" / "clause_classifier_weighted"
-RISK_MODEL_FILE = PROJECT_ROOT / "models" / "risk_baseline" / "risk_model.joblib"
+RISK_MODEL_FILE = (
+    PROJECT_ROOT
+    / "models"
+    / "risk_xlmr_attention"
+    / "best_model.pt"
+)
 
 
 # --------------------------------------------------------------------------
