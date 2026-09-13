@@ -553,3 +553,112 @@ main { max-width: var(--maxw); margin: 0 auto; padding: 44px 24px 72px; }
   .clause-card[data-risk="UNFAIR"] { border-left: 3px solid #b45309; }
   .cc-text.clamp { -webkit-line-clamp: unset; display: block; overflow: visible; }
 }
+/* ============================================================
+   AI Explanation
+   ============================================================ */
+
+.ai-explain-btn {
+  margin-top: 12px;
+  padding: 8px 13px;
+  border: 1px solid #818cf8;
+  border-radius: 7px;
+  background: rgba(99, 102, 241, 0.10);
+  color: #a5b4fc;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease,
+              border-color 0.15s ease,
+              color 0.15s ease;
+}
+
+.ai-explain-btn:hover {
+  background: rgba(99, 102, 241, 0.18);
+  border-color: #a5b4fc;
+  color: #c7d2fe;
+}
+
+.ai-explain-btn:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+/* AI explanation container */
+.ai-explanation {
+  margin-top: 14px;
+  padding: 16px 18px;
+  border: 1px solid #30313d;
+  border-radius: 9px;
+  background: #18191f;
+  color: #d4d4dc;
+  font-size: 13px;
+  line-height: 1.7;
+  max-width: 900px;
+}
+
+/* Header above the explanation */
+.ai-explanation-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 10px;
+  color: #a5b4fc;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+/* Actual Gemini response */
+.ai-explanation-content {
+  white-space: pre-wrap;
+  color: #d4d4dc;
+}
+
+/* Language selector */
+.ai-language-label {
+  margin-top: 2px;
+  margin-bottom: 6px;
+  color: #b5b5c0;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.ai-language-buttons {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.ai-language-btn {
+  padding: 6px 11px;
+  border: 1px solid #383946;
+  border-radius: 6px;
+  background: #1d1e25;
+  color: #c7c7d0;
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s ease,
+              border-color 0.15s ease,
+              color 0.15s ease;
+}
+
+.ai-language-btn:hover {
+  background: #252632;
+  border-color: #6366f1;
+  color: #e0e7ff;
+}
+
+.ai-language-btn.active {
+  background: rgba(99, 102, 241, 0.16);
+  border-color: #818cf8;
+  color: #c7d2fe;
+}
+
+.ai-explanation-error {
+  color: #fca5a5;
+}
+
+.ai-explanation[hidden] {
+  display: none;
+}

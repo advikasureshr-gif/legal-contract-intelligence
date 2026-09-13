@@ -22,10 +22,16 @@
   let translatedTexts = {};
   let selectedLanguage = "en";
 
-  const state = { search: "", type: "", risk: "all" };;
+  // Cache Gemini explanations so repeatedly opening the same
+  // explanation does not make another API request.
+  const explanationCache = {};
+
+  const state = { search: "", type: "", risk: "all" };
 
   function showView(name) {
-    for (const k of Object.keys(views)) views[k].hidden = k !== name;
+    for (const k of Object.keys(views)) {
+      views[k].hidden = k !== name;
+    }
   }
 
   /* ---------- health ---------- */
@@ -34,7 +40,9 @@
     .then((r) => r.json())
     .then((h) => {
       const pill = $("#status-pill");
+
       pill.classList.remove("mode-real", "mode-demo");
+
       if (h.mode === "real") {
         pill.classList.add("mode-real");
         $("#status-text").textContent = "Models ready";
@@ -52,10 +60,12 @@
 
   function setFile(file) {
     uploadError.hidden = true;
+
     if (!file) return;
 
     if (!/\.(pdf|docx|txt)$/i.test(file.name)) {
-      uploadError.textContent = "Please choose a PDF, DOCX or TXT file.";
+      uploadError.textContent =
+        "Please choose a PDF, DOCX or TXT file.";
       uploadError.hidden = false;
       return;
     }
@@ -82,7 +92,10 @@
     }
   });
 
-  fileInput.addEventListener("change", () => setFile(fileInput.files[0]));
+  fileInput.addEventListener("change", () => {
+    setFile(fileInput.files[0]);
+  });
+
   $("#file-clear").addEventListener("click", clearFile);
 
   ["dragenter", "dragover"].forEach((ev) =>
@@ -100,7 +113,10 @@
   );
 
   dropzone.addEventListener("drop", (e) => {
-    const f = e.dataTransfer.files && e.dataTransfer.files[0];
+    const f =
+      e.dataTransfer.files &&
+      e.dataTransfer.files[0];
+
     if (f) setFile(f);
   });
 
@@ -118,212 +134,580 @@
 
   function startSteps() {
     let i = 0;
+
     $("#loading-step").textContent = STEPS[0];
 
     stepTimer = setInterval(() => {
-      i = Math.min(i + 1, STEPS.length - 1);
-      $("#loading-step").textContent = STEPS[i];
+      i = Math.min(
+        i + 1,
+        STEPS.length - 1
+      );
+
+      $("#loading-step").textContent =
+        STEPS[i];
     }, 1400);
   }
 
   function stopSteps() {
-    if (stepTimer) clearInterval(stepTimer);
+    if (stepTimer) {
+      clearInterval(stepTimer);
+    }
+
     stepTimer = null;
   }
 
-  analyzeBtn.addEventListener("click", async () => {
-    if (!selectedFile) return;
+  analyzeBtn.addEventListener(
+    "click",
+    async () => {
+      if (!selectedFile) return;
 
-    showView("loading");
-    startSteps();
+      showView("loading");
+      startSteps();
 
-    try {
-      const res = await fetch("/api/analyze", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/octet-stream",
-          "X-Filename": encodeURIComponent(selectedFile.name).replace(/%20/g, " "),
-        },
-        body: selectedFile,
-      });
+      try {
+        const res = await fetch(
+          "/api/analyze",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type":
+                "application/octet-stream",
+              "X-Filename":
+                encodeURIComponent(
+                  selectedFile.name
+                ).replace(/%20/g, " "),
+            },
+            body: selectedFile,
+          }
+        );
 
-      const data = await res.json();
-      stopSteps();
+        const data = await res.json();
 
-      if (data.status !== "success") {
+        stopSteps();
+
+        if (data.status !== "success") {
+          showView("upload");
+
+          uploadError.textContent =
+            data.message ||
+            data.error ||
+            "Analysis failed.";
+
+          uploadError.hidden = false;
+          return;
+        }
+
+        report = data;
+
+        // Clear old Gemini explanations whenever
+        // a completely new contract is analysed.
+        Object.keys(
+          explanationCache
+        ).forEach(
+          (key) =>
+            delete explanationCache[key]
+        );
+
+        translatedTexts = {};
+        selectedLanguage = "en";
+
+        renderResults();
+        showView("results");
+
+        window.scrollTo({
+          top: 0,
+        });
+      } catch (err) {
+        stopSteps();
+
+        console.error(
+          "Analysis failed:",
+          err
+        );
+
         showView("upload");
-        uploadError.textContent =
-          data.message || data.error || "Analysis failed.";
-        uploadError.hidden = false;
-        return;
-      }
 
-      report = data;
-      renderResults();
-      showView("results");
-      window.scrollTo({ top: 0 });
-    } catch (err) {
-      stopSteps();
-      showView("upload");
-      uploadError.textContent = "Could not reach the analysis server.";
-      uploadError.hidden = false;
+        uploadError.textContent =
+          "Could not reach the analysis server.";
+
+        uploadError.hidden = false;
+      }
     }
-  });
+  );
 
   /* ---------- helpers ---------- */
 
-  const pct = (x) => Math.round(x * 100) + "%";
-  async function translateReport(targetLanguage) {
-  if (!report || targetLanguage === "en") {
+  const pct = (x) =>
+    Math.round(x * 100) + "%";
+
+  async function translateReport(
+    targetLanguage
+  ) {
+    if (
+      !report ||
+      targetLanguage === "en"
+    ) {
+      translatedTexts = {};
+      selectedLanguage = "en";
+      renderList();
+      return;
+    }
+
+    const texts =
+      report.clauses.map(
+        (c) =>
+          c.original_text ||
+          c.processed_text ||
+          ""
+      );
+
+    const res = await fetch(
+      "/api/translate",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type":
+            "application/json",
+        },
+        body: JSON.stringify({
+          texts,
+          target_language:
+            targetLanguage,
+        }),
+      }
+    );
+
+    const data = await res.json();
+
+    if (data.status !== "success") {
+      throw new Error(
+        data.message ||
+          data.error ||
+          "Translation failed."
+      );
+    }
+
     translatedTexts = {};
-    selectedLanguage = "en";
+
+    report.clauses.forEach(
+      (c, index) => {
+        translatedTexts[
+          c.clause_id
+        ] =
+          data.translations[
+            index
+          ] || "";
+      }
+    );
+
+    selectedLanguage =
+      targetLanguage;
+
     renderList();
-    return;
   }
 
-  const texts = report.clauses.map(
-    (c) => c.original_text || c.processed_text || ""
-  );
-
-  const res = await fetch("/api/translate", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      texts,
-      target_language: targetLanguage,
-    }),
-  });
-
-  const data = await res.json();
-
-  if (data.status !== "success") {
-    throw new Error(data.message || data.error || "Translation failed.");
-  }
-
-  translatedTexts = {};
-
-  report.clauses.forEach((c, index) => {
-    translatedTexts[c.clause_id] = data.translations[index] || "";
-  });
-
-  selectedLanguage = targetLanguage;
-  renderList();
-}
   const prettyType = (t) =>
     t
       .toLowerCase()
       .replace(/_/g, " ")
-      .replace(/\b\w/g, (c) => c.toUpperCase());
+      .replace(
+        /\b\w/g,
+        (c) => c.toUpperCase()
+      );
 
   /*
-   * Convert the model's risk probability into a UI severity.
+   * Convert the model's risk probability
+   * into a UI severity.
    *
-   * risk_probability represents the model's estimated probability
-   * of the UNFAIR class.
+   * risk_probability represents the model's
+   * estimated probability of the UNFAIR class.
    *
-   * This does not change the model's FAIR/UNFAIR decision.
+   * This does not change the model's
+   * FAIR/UNFAIR decision.
    */
-  function getRiskSeverity(probability) {
-  if (probability >= 0.93) return "high";
-  if (probability >= 0.20) return "medium";
-  return "low";
+  function getRiskSeverity(
+    probability
+  ) {
+    if (probability >= 0.93)
+      return "high";
+
+    if (probability >= 0.20)
+      return "medium";
+
+    return "low";
   }
 
-  function getRiskSeverityLabel(severity) {
-    return severity.charAt(0).toUpperCase() + severity.slice(1);
+  function getRiskSeverityLabel(
+    severity
+  ) {
+    return (
+      severity.charAt(0).toUpperCase() +
+      severity.slice(1)
+    );
   }
 
   function esc(s) {
-    return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({
-      "&": "&amp;",
-      "<": "&lt;",
-      ">": "&gt;",
-      '"': "&quot;",
-      "'": "&#39;",
-    }[c]));
+    return String(
+      s == null ? "" : s
+    ).replace(
+      /[&<>"']/g,
+      (c) =>
+        ({
+          "&": "&amp;",
+          "<": "&lt;",
+          ">": "&gt;",
+          '"': "&quot;",
+          "'": "&#39;",
+        })[c]
+    );
+  }
+
+  /* ============================================================
+     GEMINI — EXPLAIN CLAUSE
+     ============================================================ */
+
+  async function explainClause(
+    clause,
+    language,
+    container
+  ) {
+    const cacheKey =
+      clause.clause_id +
+      "::" +
+      language;
+
+    // Use cached explanation if available.
+    if (explanationCache[cacheKey]) {
+      container.innerHTML =
+        explanationCache[
+          cacheKey
+        ];
+
+      return;
+    }
+
+    container.innerHTML = `
+      <div class="ai-loading">
+        <span class="ai-spinner"></span>
+        <span>Generating explanation…</span>
+      </div>
+    `;
+
+    try {
+      const res = await fetch(
+        "/api/explain",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type":
+              "application/json",
+          },
+          body: JSON.stringify({
+            clause:
+              clause.original_text ||
+              clause.processed_text ||
+              "",
+
+            language: language,
+
+            risk_label:
+              clause.risk_label ||
+              "UNKNOWN",
+
+            clause_type:
+              clause.clause_type ||
+              "UNKNOWN",
+
+            risk_reasons:
+              Array.isArray(
+                clause.risk_reasons
+              )
+                ? clause.risk_reasons
+                : [],
+          }),
+        }
+      );
+
+      const data = await res.json();
+
+      if (
+        !res.ok ||
+        data.status !== "success"
+      ) {
+        throw new Error(
+          data.message ||
+            data.error ||
+            "Could not generate explanation."
+        );
+      }
+
+      const explanation =
+        esc(data.explanation)
+          .replace(
+            /\n\n/g,
+            "<br><br>"
+          )
+          .replace(
+            /\n/g,
+            "<br>"
+          );
+
+      const html = `
+        <div class="ai-answer">
+          ${explanation}
+        </div>
+      `;
+
+      explanationCache[
+        cacheKey
+      ] = html;
+
+      container.innerHTML =
+        html;
+    } catch (err) {
+      console.error(
+        "Gemini explanation failed:",
+        err
+      );
+
+      container.innerHTML = `
+        <div class="ai-error">
+          Could not generate an explanation.
+          Please try again.
+        </div>
+      `;
+    }
+  }
+
+  function createAIControls(
+    clause
+  ) {
+    return `
+      <div class="ai-explain-area">
+
+        <button
+          type="button"
+          class="ai-explain-btn"
+          data-clause-id="${esc(
+            clause.clause_id
+          )}"
+        >
+          ✨ Explain with AI
+        </button>
+
+        <div
+          class="ai-panel"
+          hidden
+        >
+          <div class="ai-language-row">
+            <span>
+              Explain this clause in:
+            </span>
+
+            <div
+              class="ai-language-buttons"
+              role="group"
+              aria-label="Explanation language"
+            >
+              <button
+                type="button"
+                class="ai-lang-btn active"
+                data-lang="en"
+              >
+                English
+              </button>
+
+              <button
+                type="button"
+                class="ai-lang-btn"
+                data-lang="hi"
+              >
+                हिंदी
+              </button>
+
+              <button
+                type="button"
+                class="ai-lang-btn"
+                data-lang="ta"
+              >
+                தமிழ்
+              </button>
+            </div>
+          </div>
+
+          <div
+            class="ai-response"
+          ></div>
+        </div>
+
+      </div>
+    `;
   }
 
   /* ---------- rendering ---------- */
 
   function renderResults() {
-    $("#res-doc-name").textContent = report.document_name;
+    $("#res-doc-name").textContent =
+      report.document_name;
 
     const meta = [
-      report.mode === "real" ? "Full model pipeline" : "Demo pipeline",
-      "Language: " + (report.language || "unknown"),
-      report.page_count + (report.page_count === 1 ? " page" : " pages"),
-      report.clause_count + " clauses",
+      report.mode === "real"
+        ? "Full model pipeline"
+        : "Demo pipeline",
+
+      "Language: " +
+        (report.language ||
+          "unknown"),
+
+      report.page_count +
+        (report.page_count === 1
+          ? " page"
+          : " pages"),
+
+      report.clause_count +
+        " clauses",
     ];
 
-    $("#res-meta").innerHTML = meta
-      .map((m) => `<span>${esc(m)}</span>`)
-      .join("");
+    $("#res-meta").innerHTML =
+      meta
+        .map(
+          (m) =>
+            `<span>${esc(
+              m
+            )}</span>`
+        )
+        .join("");
 
-    const counts = report.summary.risk_counts || {};
-    const unfair = counts.UNFAIR || 0;
-    const fair = counts.FAIR || 0;
-    const total = unfair + fair || 1;
+    const counts =
+      report.summary
+        .risk_counts || {};
 
-    $("#stat-clauses").textContent = report.clause_count;
+    const unfair =
+      counts.UNFAIR || 0;
+
+    const fair =
+      counts.FAIR || 0;
+
+    const total =
+      unfair + fair || 1;
+
+    $("#stat-clauses").textContent =
+      report.clause_count;
 
     $("#stat-pages").textContent =
-      report.page_count + (report.page_count === 1 ? " page" : " pages");
+      report.page_count +
+      (report.page_count === 1
+        ? " page"
+        : " pages");
 
-    const flaggedEl = $("#stat-flagged");
-    flaggedEl.textContent = unfair;
-    flaggedEl.classList.toggle("is-flag", unfair > 0);
+    const flaggedEl =
+      $("#stat-flagged");
+
+    flaggedEl.textContent =
+      unfair;
+
+    flaggedEl.classList.toggle(
+      "is-flag",
+      unfair > 0
+    );
 
     $("#stat-flagged-sub").textContent =
-      pct(unfair / (report.clause_count || 1)) + " of clauses";
+      pct(
+        unfair /
+          (report.clause_count ||
+            1)
+      ) +
+      " of clauses";
 
     $("#stat-conf").textContent =
-      pct(report.summary.avg_clause_confidence || 0);
+      pct(
+        report.summary
+          .avg_clause_confidence ||
+          0
+      );
 
     $("#stat-lang").textContent =
-      "language " + (report.language || "—");
+      "language " +
+      (report.language ||
+        "—");
 
     $("#risk-meter").innerHTML =
-      `<div class="seg seg-unfair" style="width:${(unfair / total) * 100}%"></div>` +
-      `<div class="seg seg-fair" style="width:${(fair / total) * 100}%"></div>`;
+      `<div class="seg seg-unfair" style="width:${
+        (unfair / total) * 100
+      }%"></div>` +
+      `<div class="seg seg-fair" style="width:${
+        (fair / total) * 100
+      }%"></div>`;
 
     $("#risk-legend").innerHTML =
       `<span><span class="lg-top"><span class="swatch fair"></span>Standard</span><b>${fair}</b></span>` +
       `<span><span class="lg-top"><span class="swatch unfair"></span>Flagged</span><b>${unfair}</b></span>`;
 
-    const types = Object.entries(report.summary.clause_type_counts || {})
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 6);
+    const types =
+      Object.entries(
+        report.summary
+          .clause_type_counts ||
+          {}
+      )
+        .sort(
+          (a, b) => b[1] - a[1]
+        )
+        .slice(0, 6);
 
-    const maxType = types.length ? types[0][1] : 1;
+    const maxType =
+      types.length
+        ? types[0][1]
+        : 1;
 
-    $("#type-bars").innerHTML = types
-      .map(
-        ([t, n]) => `
+    $("#type-bars").innerHTML =
+      types
+        .map(
+          ([t, n]) => `
         <div class="type-bar">
-          <span class="tb-label">${esc(prettyType(t))}</span>
+          <span class="tb-label">${esc(
+            prettyType(t)
+          )}</span>
           <span class="tb-count">${n}</span>
           <span class="tb-track">
-            <span class="tb-fill" style="width:${(n / maxType) * 100}%"></span>
+            <span
+              class="tb-fill"
+              style="width:${
+                (n / maxType) *
+                100
+              }%"
+            ></span>
           </span>
         </div>`
-      )
-      .join("");
+        )
+        .join("");
 
-    const sel = $("#filter-type");
+    const sel =
+      $("#filter-type");
 
-    sel.innerHTML = '<option value="">All clause types</option>';
+    sel.innerHTML =
+      '<option value="">All clause types</option>';
 
-    Object.keys(report.summary.clause_type_counts || {})
+    Object.keys(
+      report.summary
+        .clause_type_counts ||
+        {}
+    )
       .sort()
       .forEach((t) => {
-        const o = document.createElement("option");
+        const o =
+          document.createElement(
+            "option"
+          );
+
         o.value = t;
+
         o.textContent =
           prettyType(t) +
           " (" +
-          report.summary.clause_type_counts[t] +
+          report.summary
+            .clause_type_counts[
+              t
+            ] +
           ")";
 
         sel.appendChild(o);
@@ -336,34 +720,52 @@
     $("#search").value = "";
 
     document
-      .querySelectorAll("#filter-risk button")
+      .querySelectorAll(
+        "#filter-risk button"
+      )
       .forEach((b) =>
-        b.classList.toggle("active", b.dataset.risk === "all")
+        b.classList.toggle(
+          "active",
+          b.dataset.risk ===
+            "all"
+        )
       );
 
     renderList();
   }
 
   function matches(c) {
-    if (state.risk !== "all" && c.risk_label !== state.risk) {
+    if (
+      state.risk !== "all" &&
+      c.risk_label !==
+        state.risk
+    ) {
       return false;
     }
 
-    if (state.type && c.clause_type !== state.type) {
+    if (
+      state.type &&
+      c.clause_type !==
+        state.type
+    ) {
       return false;
     }
 
     if (state.search) {
-      const q = state.search.toLowerCase();
+      const q =
+        state.search.toLowerCase();
 
       const hay = (
         c.clause_id +
         " " +
-        c.section +
+        (c.section || "") +
         " " +
-        c.original_text +
+        (c.original_text ||
+          "") +
         " " +
-        prettyType(c.clause_type)
+        prettyType(
+          c.clause_type
+        )
       ).toLowerCase();
 
       if (!hay.includes(q)) {
@@ -375,146 +777,442 @@
   }
 
   function renderList() {
-    const list = $("#clause-list");
-    const visible = report.clauses.filter(matches);
+    const list =
+      $("#clause-list");
+
+    const visible =
+      report.clauses.filter(
+        matches
+      );
 
     $("#result-count").textContent =
-      visible.length + " of " + report.clauses.length + " clauses";
+      visible.length +
+      " of " +
+      report.clauses.length +
+      " clauses";
 
-    $("#empty-state").hidden = visible.length !== 0;
+    $("#empty-state").hidden =
+      visible.length !== 0;
 
-    list.innerHTML = visible
-      .map((c) => {
-        const unfair = c.risk_label === "UNFAIR";
-        const originalText = c.original_text || c.processed_text || "";
-        const text =
-          selectedLanguage === "en"
-          ? originalText
-          : translatedTexts[c.clause_id] || originalText;
-        const long = text.length > 300;
+    list.innerHTML =
+      visible
+        .map((c) => {
+          const originalText =
+            c.original_text ||
+            c.processed_text ||
+            "";
 
-        const probability = Number(c.risk_probability) || 0;
-        const severity = getRiskSeverity(probability);
-        const severityLabel = getRiskSeverityLabel(severity);
+          const text =
+            selectedLanguage ===
+            "en"
+              ? originalText
+              : translatedTexts[
+                  c.clause_id
+                ] ||
+                originalText;
 
-        const reasons =
-          c.risk_reasons && c.risk_reasons.length
-            ? `<ul class="risk-reasons">${c.risk_reasons
-                .map((r) => `<li>${esc(r)}</li>`)
-                .join("")}</ul>`
-            : "";
+          const long =
+            text.length > 300;
 
-        return `
-        <li class="clause-card" data-risk="${c.risk_label}" data-severity="${severity}">
+          const probability =
+            Number(
+              c.risk_probability
+            ) || 0;
+
+          const severity =
+            getRiskSeverity(
+              probability
+            );
+
+          const severityLabel =
+            getRiskSeverityLabel(
+              severity
+            );
+
+          const reasons =
+            c.risk_reasons &&
+            c.risk_reasons.length
+              ? `<ul class="risk-reasons">${c.risk_reasons
+                  .map(
+                    (r) =>
+                      `<li>${esc(
+                        r
+                      )}</li>`
+                  )
+                  .join("")}</ul>`
+              : "";
+
+          return `
+        <li
+          class="clause-card"
+          data-risk="${esc(
+            c.risk_label
+          )}"
+          data-severity="${severity}"
+        >
+
           <div class="cc-head">
-            <span class="cc-id">${esc(c.clause_id)}</span>
-            <span class="cc-type">${esc(prettyType(c.clause_type))}</span>
-            ${c.section ? `<span class="cc-section">${esc(c.section)}</span>` : ""}
-            <span class="cc-page">page ${c.page}</span>
+            <span class="cc-id">
+              ${esc(c.clause_id)}
+            </span>
+
+            <span class="cc-type">
+              ${esc(
+                prettyType(
+                  c.clause_type
+                )
+              )}
+            </span>
+
+            ${
+              c.section
+                ? `<span class="cc-section">${esc(
+                    c.section
+                  )}</span>`
+                : ""
+            }
+
+            <span class="cc-page">
+              page ${esc(
+                c.page
+              )}
+            </span>
           </div>
 
-          <p class="cc-text ${long ? "clamp" : ""}">${esc(text)}</p>
+          <p
+            class="cc-text ${
+              long ? "clamp" : ""
+            }"
+          >
+            ${esc(text)}
+          </p>
 
-          ${long ? '<button class="cc-toggle">Show more</button>' : ""}
+          ${
+            long
+              ? '<button class="cc-toggle">Show more</button>'
+              : ""
+          }
 
           <div class="cc-meta">
+
             <span class="conf">
               type confidence
+
               <span class="conf-track">
                 <span
                   class="conf-fill"
-                  style="width:${c.clause_confidence * 100}%"
+                  style="width:${
+                    c.clause_confidence *
+                    100
+                  }%"
                 ></span>
               </span>
-              <b>${pct(c.clause_confidence)}</b>
+
+              <b>
+                ${pct(
+                  c.clause_confidence
+                )}
+              </b>
             </span>
 
-            <span class="risk-badge ${severity}">
+            <span
+              class="risk-badge ${severity}"
+            >
               <span class="rb-dot"></span>
-              ${severityLabel} Risk · ${pct(probability)} estimated unfairness
+
+              ${severityLabel} Risk ·
+              ${pct(
+                probability
+              )}
+              estimated unfairness
             </span>
 
-            <span class="risk-status ${severity === "high" ? "unfair" : "fair"}">
-            ${severity === "high" ? "Flagged" : severity === "medium" ? "Review" : "Standard"}
+            <span
+              class="risk-status ${
+                severity === "high"
+                  ? "unfair"
+                  : "fair"
+              }"
+            >
+              ${
+                severity ===
+                "high"
+                  ? "Flagged"
+                  : severity ===
+                    "medium"
+                  ? "Review"
+                  : "Standard"
+              }
             </span>
 
             ${reasons}
-          </div>
-        </li>`;
-      })
-      .join("");
 
-    list.querySelectorAll(".cc-toggle").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const p = btn.previousElementSibling;
-        const clamped = p.classList.toggle("clamp");
-        btn.textContent = clamped ? "Show more" : "Show less";
+          </div>
+
+          ${createAIControls(c)}
+
+        </li>`;
+        })
+        .join("");
+
+    /* ---------- Show more / Show less ---------- */
+
+    list
+      .querySelectorAll(
+        ".cc-toggle"
+      )
+      .forEach((btn) => {
+        btn.addEventListener(
+          "click",
+          () => {
+            const p =
+              btn.previousElementSibling;
+
+            const clamped =
+              p.classList.toggle(
+                "clamp"
+              );
+
+            btn.textContent =
+              clamped
+                ? "Show more"
+                : "Show less";
+          }
+        );
       });
-    });
+
+    /* ---------- Explain with AI ---------- */
+
+    list
+      .querySelectorAll(
+        ".ai-explain-btn"
+      )
+      .forEach((btn) => {
+        btn.addEventListener(
+          "click",
+          () => {
+            const card =
+              btn.closest(
+                ".clause-card"
+              );
+
+            const clauseId =
+              btn.dataset.clauseId;
+
+            const clause =
+              report.clauses.find(
+                (c) =>
+                  c.clause_id ===
+                  clauseId
+              );
+
+            if (!clause) return;
+
+            const panel =
+              card.querySelector(
+                ".ai-panel"
+              );
+
+            panel.hidden =
+              !panel.hidden;
+
+            if (
+              !panel.hidden
+            ) {
+              btn.textContent =
+                "✕ Hide AI explanation";
+            } else {
+              btn.textContent =
+                "✨ Explain with AI";
+            }
+          }
+        );
+      });
+
+    /* ---------- AI language buttons ---------- */
+
+    list
+      .querySelectorAll(
+        ".ai-lang-btn"
+      )
+      .forEach((btn) => {
+        btn.addEventListener(
+          "click",
+          async () => {
+            const card =
+              btn.closest(
+                ".clause-card"
+              );
+
+            const clauseId =
+              card.querySelector(
+                ".ai-explain-btn"
+              ).dataset.clauseId;
+
+            const clause =
+              report.clauses.find(
+                (c) =>
+                  c.clause_id ===
+                  clauseId
+              );
+
+            if (!clause) return;
+
+            const language =
+              btn.dataset.lang;
+
+            const responseBox =
+              card.querySelector(
+                ".ai-response"
+              );
+
+            card
+              .querySelectorAll(
+                ".ai-lang-btn"
+              )
+              .forEach((b) =>
+                b.classList.toggle(
+                  "active",
+                  b === btn
+                )
+              );
+
+            await explainClause(
+              clause,
+              language,
+              responseBox
+            );
+          }
+        );
+      });
   }
 
   /* ---------- controls ---------- */
 
-  $("#search").addEventListener("input", (e) => {
-    state.search = e.target.value.trim();
-    renderList();
-  });
+  $("#search").addEventListener(
+    "input",
+    (e) => {
+      state.search =
+        e.target.value.trim();
 
-  $("#filter-type").addEventListener("change", (e) => {
-    state.type = e.target.value;
-    renderList();
-  });
-  /*$("#output-language").addEventListener("change", async (e) => {
-  const language = e.target.value;
+      renderList();
+    }
+  );
 
-  try {
-    e.target.disabled = true;
+  $("#filter-type").addEventListener(
+    "change",
+    (e) => {
+      state.type =
+        e.target.value;
 
-    await translateReport(language);
-  } catch (err) {
-    console.error("Translation failed:", err);
-    alert("Could not translate the results. Please try again.");
-    e.target.value = selectedLanguage;
-  } finally {
-    e.target.disabled = false;
-  }
-});*/
-  $("#filter-risk").addEventListener("click", (e) => {
-    const btn = e.target.closest("button");
-    if (!btn) return;
+      renderList();
+    }
+  );
 
-    state.risk = btn.dataset.risk;
+  $("#filter-risk").addEventListener(
+    "click",
+    (e) => {
+      const btn =
+        e.target.closest(
+          "button"
+        );
 
-    document
-      .querySelectorAll("#filter-risk button")
-      .forEach((b) => b.classList.toggle("active", b === btn));
+      if (!btn) return;
 
-    renderList();
-  });
+      state.risk =
+        btn.dataset.risk;
 
-  $("#btn-new").addEventListener("click", () => {
-    clearFile();
-    showView("upload");
-  });
+      document
+        .querySelectorAll(
+          "#filter-risk button"
+        )
+        .forEach((b) =>
+          b.classList.toggle(
+            "active",
+            b === btn
+          )
+        );
 
-  $("#btn-print").addEventListener("click", () => window.print());
+      renderList();
+    }
+  );
 
-  $("#btn-export").addEventListener("click", () => {
-    const blob = new Blob(
-      [JSON.stringify(report, null, 2)],
-      { type: "application/json" }
-    );
+  $("#btn-new").addEventListener(
+    "click",
+    () => {
+      clearFile();
+      report = null;
+      translatedTexts = {};
+      selectedLanguage = "en";
 
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download =
-      report.document_name.replace(/\.[^.]+$/, "") +
-      "_analysis.json";
+      Object.keys(
+        explanationCache
+      ).forEach(
+        (key) =>
+          delete explanationCache[
+            key
+          ]
+      );
 
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
+      showView("upload");
+    }
+  );
 
-    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-  });
+  $("#btn-print").addEventListener(
+    "click",
+    () => window.print()
+  );
+
+  $("#btn-export").addEventListener(
+    "click",
+    () => {
+      const blob =
+        new Blob(
+          [
+            JSON.stringify(
+              report,
+              null,
+              2
+            ),
+          ],
+          {
+            type:
+              "application/json",
+          }
+        );
+
+      const a =
+        document.createElement(
+          "a"
+        );
+
+      a.href =
+        URL.createObjectURL(
+          blob
+        );
+
+      a.download =
+        report.document_name.replace(
+          /\.[^.]+$/,
+          ""
+        ) +
+        "_analysis.json";
+
+      document.body.appendChild(
+        a
+      );
+
+      a.click();
+
+      a.remove();
+
+      setTimeout(
+        () =>
+          URL.revokeObjectURL(
+            a.href
+          ),
+        1000
+      );
+    }
+  );
 })();

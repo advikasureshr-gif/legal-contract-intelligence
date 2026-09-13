@@ -43,6 +43,7 @@ import traceback
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from google import genai
 
 # --------------------------------------------------------------------------
 # Paths / import wiring
@@ -86,6 +87,11 @@ _translator = None
 _translator_lock = threading.Lock()
 _translator_error: str | None = None
 
+# Gemini is loaded lazily.
+_gemini_client = None
+_gemini_lock = threading.Lock()
+_gemini_error: str | None = None
+
 
 def get_translator():
     """Load the NLLB translator once, lazily."""
@@ -107,6 +113,40 @@ def get_translator():
             print("[webapp] Translator unavailable ->", _translator_error)
 
     return _translator
+
+def get_gemini_client():
+    """Create the Gemini client once, lazily."""
+    global _gemini_client, _gemini_error
+
+    if _gemini_client is not None or _gemini_error is not None:
+        return _gemini_client
+
+    with _gemini_lock:
+        if _gemini_client is not None or _gemini_error is not None:
+            return _gemini_client
+
+        try:
+            api_key = os.environ.get("GEMINI_API_KEY")
+
+            if not api_key:
+                raise RuntimeError(
+                    "GEMINI_API_KEY environment variable is not set."
+                )
+
+            _gemini_client = genai.Client(
+                api_key=api_key
+            )
+
+        except Exception as exc:
+            _gemini_error = (
+                f"{type(exc).__name__}: {exc}"
+            )
+            print(
+                "[webapp] Gemini unavailable ->",
+                _gemini_error
+            )
+
+    return _gemini_client
 
 def models_present() -> bool:
     return CLAUSE_MODEL_DIR.is_dir() and RISK_MODEL_FILE.is_file()
@@ -600,6 +640,230 @@ class Handler(BaseHTTPRequestHandler):
                 },
                 status=500,
             )
+    def handle_explain(self) -> None:
+        """Explain one contractual clause using Gemini."""
+
+        try:
+            length = int(
+                self.headers.get(
+                    "Content-Length",
+                    "0",
+                )
+            )
+        except ValueError:
+            length = 0
+
+        if length <= 0:
+            self._send_json(
+                {"error": "Empty request."},
+                status=400,
+            )
+            return
+
+        if length > 100 * 1024:
+            self._send_json(
+                {
+                    "error":
+                        "Explanation request too large."
+                },
+                status=413,
+            )
+            return
+
+        try:
+            body = self.rfile.read(length)
+
+            payload = json.loads(
+                body.decode("utf-8")
+            )
+
+            clause = str(
+                payload.get(
+                    "clause",
+                    "",
+                )
+            ).strip()
+
+            language = payload.get(
+                "language",
+                "en",
+            )
+
+            risk_label = str(
+                payload.get(
+                    "risk_label",
+                    "UNKNOWN",
+                )
+            )
+
+            clause_type = str(
+                payload.get(
+                    "clause_type",
+                    "UNKNOWN",
+                )
+            )
+
+            risk_reasons = payload.get(
+                "risk_reasons",
+                [],
+            )
+
+            if not clause:
+                self._send_json(
+                    {
+                        "error":
+                            "Clause text is required."
+                    },
+                    status=400,
+                )
+                return
+
+            if language not in {
+                "en",
+                "hi",
+                "ta",
+            }:
+                self._send_json(
+                    {
+                        "error":
+                            "Unsupported explanation language."
+                    },
+                    status=400,
+                )
+                return
+
+            if not isinstance(
+                risk_reasons,
+                list,
+            ):
+                risk_reasons = []
+
+            client = get_gemini_client()
+
+            if client is None:
+                self._send_json(
+                    {
+                        "status": "error",
+                        "message":
+                            "Gemini is unavailable: "
+                            + str(_gemini_error),
+                    },
+                    status=503,
+                )
+                return
+
+            language_names = {
+                "en": "English",
+                "hi": "Hindi",
+                "ta": "Tamil",
+            }
+
+            target_language = (
+                language_names[language]
+            )
+
+            if risk_reasons:
+                reasons_text = ", ".join(
+                    str(reason)
+                    for reason in risk_reasons
+                )
+            else:
+                reasons_text = (
+                    "No specific risk indicators "
+                    "were provided."
+                )
+
+            prompt = f"""
+You are a legal-information assistant inside
+a contract analysis application.
+
+Your task is to explain ONE contractual clause
+to a user in {target_language}.
+
+IMPORTANT RULES:
+
+- Explain only the supplied clause and the analysis provided by our system.
+- Do not invent facts, obligations, deadlines, penalties, rights, or other contract terms.
+- Do not independently change, assign, or justify the risk classification.
+- The risk classification and probability were produced by our machine-learning model.
+- Do not claim to know why the model made its classification unless a reason is explicitly provided.
+- Do not state that a clause is definitely legal or illegal.
+- Do not provide personalized legal advice.
+- Use clear, accessible language.
+- Respond entirely in {target_language}.
+- Do not use Markdown formatting, bullet symbols, or special formatting characters. Use simple numbered sections.
+
+CLAUSE:
+{clause}
+
+OUR MODEL'S ANALYSIS:
+
+Risk classification:
+{risk_label}
+
+Clause type:
+{clause_type}
+
+Risk indicators:
+{reasons_text}
+
+Please provide:
+
+1. What this clause means in simple language.
+2. What our system classified this clause as.
+3. What parts of the clause the user should pay attention to.
+
+Keep the explanation concise but useful.
+""".strip()
+
+            response = client.models.generate_content(
+                model="gemini-3.5-flash",
+                contents=prompt,
+            )
+
+            explanation = (
+                response.text or ""
+            ).strip()
+
+            if not explanation:
+                self._send_json(
+                    {
+                        "status": "error",
+                        "message":
+                            "Gemini returned an empty "
+                            "explanation.",
+                    },
+                    status=502,
+                )
+                return
+
+            self._send_json(
+                {
+                    "status": "success",
+                    "language": language,
+                    "explanation": explanation,
+                }
+            )
+
+        except json.JSONDecodeError:
+            self._send_json(
+                {
+                    "error":
+                        "Invalid JSON request."
+                },
+                status=400,
+            )
+
+        except Exception as exc:
+            traceback.print_exc()
+
+            self._send_json(
+                {
+                    "status": "error",
+                    "message": str(exc),
+                },
+                status=500,
+            )
     def do_POST(self) -> None:  # noqa: N802
         route = self.path.split("?", 1)[0]
 
@@ -607,6 +871,10 @@ class Handler(BaseHTTPRequestHandler):
             self.handle_translate()
             return
 
+        if route == "/api/explain":
+            self.handle_explain()
+            return
+        
         if route != "/api/analyze":
             self._send_json({"error": "Not found"}, status=404)
             return

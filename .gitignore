@@ -223,3 +223,5 @@ models/
 Datasets/processed/risk_dataset/
 Datasets/processed/risk_features/
 Datasets/processed/risk_dataset.zip
+
+.env
