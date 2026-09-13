@@ -1125,7 +1125,7 @@ def main():
             indent=4,
         )
 
-    # ========================================================
+        # ========================================================
     # Complete
     # ========================================================
 
@@ -1155,6 +1155,72 @@ def main():
         f"Model saved to: {OUTPUT_DIR}"
     )
 
+    # ========================================================
+    # Create ZIP for Local Download
+    # ========================================================
 
+    print()
+    print("=" * 70)
+    print("CREATING MODEL ZIP FOR LOCAL DOWNLOAD")
+    print("=" * 70)
+
+    import shutil
+
+    ZIP_PATH = Path("risk_xlmr_attention.zip")
+
+    # Create:
+    # risk_xlmr_attention.zip
+    #
+    # containing:
+    # models/
+    #   risk_xlmr_attention/
+    #       best_model.pt
+    #       config/tokenizer files
+    #       risk_threshold.joblib
+    #       test_predictions.joblib
+    #       attention_examples.joblib
+    #       model_config.json
+    #       training_summary.json
+
+    shutil.make_archive(
+        ZIP_PATH.with_suffix(""),
+        "zip",
+        OUTPUT_DIR.parent,
+        OUTPUT_DIR.name,
+    )
+
+    print(
+        f"ZIP created: {ZIP_PATH}"
+    )
+
+    # ========================================================
+    # Download ZIP to Local Computer
+    # ========================================================
+
+    try:
+
+        from google.colab import files
+
+        print()
+        print("Starting download to local computer...")
+
+        files.download(
+            str(ZIP_PATH)
+        )
+
+        print(
+            "✓ Download requested."
+        )
+
+    except ImportError:
+
+        print()
+        print(
+            "Not running in Google Colab."
+        )
+
+        print(
+            f"ZIP is available at: {ZIP_PATH}"
+        )
 if __name__ == "__main__":
     main()
