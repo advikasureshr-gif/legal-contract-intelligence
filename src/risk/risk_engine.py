@@ -5,7 +5,7 @@ import joblib
 import torch
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
-from xlmr_attention_model import LegalXLMRAttentionRiskModel
+from risk.xlmr_attention_model import LegalXLMRAttentionRiskModel
 
 
 # ============================================================

@@ -226,15 +226,9 @@
    * This does not change the model's FAIR/UNFAIR decision.
    */
   function getRiskSeverity(probability) {
-    if (probability >= 0.70) {
-      return "high";
-    }
-
-    if (probability >= 0.40) {
-      return "medium";
-    }
-
-    return "low";
+  if (probability >= 0.93) return "high";
+  if (probability >= 0.20) return "medium";
+  return "low";
   }
 
   function getRiskSeverityLabel(severity) {
@@ -440,8 +434,8 @@
               ${severityLabel} Risk · ${pct(probability)} estimated unfairness
             </span>
 
-            <span class="risk-status ${unfair ? "unfair" : "fair"}">
-              ${unfair ? "Flagged" : "Standard"}
+            <span class="risk-status ${severity === "high" ? "unfair" : "fair"}">
+            ${severity === "high" ? "Flagged" : severity === "medium" ? "Review" : "Standard"}
             </span>
 
             ${reasons}
