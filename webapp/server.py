@@ -806,6 +806,7 @@ Clause type:
 
 Risk indicators:
 {reasons_text}
+If Risk indicators is empty or indicates that none were provided, do not infer or speculate about why the model assigned its classification.
 
 Please provide:
 
