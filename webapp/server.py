@@ -806,7 +806,12 @@ Clause type:
 
 Risk indicators:
 {reasons_text}
+
 If Risk indicators is empty or indicates that none were provided, do not infer or speculate about why the model assigned its classification.
+
+Do not explain or speculate about why our model assigned this classification.
+Only report the classification and clause type provided by our system.
+Do not invent risk factors that are not explicitly present in the supplied analysis or clause.
 
 Please provide:
 
@@ -818,7 +823,7 @@ Keep the explanation concise but useful.
 """.strip()
 
             response = client.models.generate_content(
-                model="gemini-3.5-flash",
+                model="gemini-2.5-flash",
                 contents=prompt,
             )
 
