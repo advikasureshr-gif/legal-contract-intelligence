@@ -1,4 +1,4 @@
-# Multilingual AI-Based Legal Contract Risk Analyzer
+# AI-Based Legal Contract Risk Analyzer
 
 An AI-powered web application that analyzes legal contracts, identifies contractual clause types, and flags potentially unfair terms. It helps users understand complex contract language by presenting clause-level risk assessments and optional explanations in English, Hindi, and Tamil.
 
@@ -58,11 +58,9 @@ A GPU is recommended for faster model inference, although CPU execution may be p
 ### 1. Clone the Repository
 
 ```bash
-git clone <YOUR_REPOSITORY_URL>
-cd <YOUR_PROJECT_DIRECTORY>
+git clone https://github.com/advikasureshr-gif/legal-contract-intelligence
+cd legal-contract-intelligence
 ```
-
-Replace the placeholders with your Git repository URL and project directory.
 
 ### 2. Create a Virtual Environment
 
@@ -82,19 +80,12 @@ source venv/bin/activate
 
 ### 3. Install Dependencies
 
-If the repository includes a `requirements.txt` file:
-
 ```bash
 pip install -r requirements.txt
 ```
-
-Otherwise, install the dependencies specified by the project and its model-loading scripts.
-
 ## Configuration
 
-The application may require an API key for its optional generative-AI explanation feature.
-
-If the explanation feature uses Google Gemini, configure the `GEMINI_API_KEY` environment variable with a valid API key.
+The application uses the `GEMINI_API_KEY` environment variable for its optional generative-AI explanation feature. Each user should configure their own Gemini API key if they wish to use this feature.
 
 **Windows PowerShell**
 
@@ -108,21 +99,20 @@ $env:GEMINI_API_KEY="your_api_key"
 export GEMINI_API_KEY="your_api_key"
 ```
 
-Keep API keys private. Do not commit them to the repository or include them in screenshots or shared configuration files.
+Replace `your_api_key` with your own API key.
 
-The core contract analysis and the optional explanation feature may have different configuration requirements.
+The core contract analysis pipeline and the optional explanation feature have separate configuration requirements. A Gemini API key is only needed for generating explanations, provided the application is configured to handle a missing key gracefully.
+
+**Security:** Do not commit your API key to GitHub or include it in shared files.
 
 ## Running the Application
 
 From the project root, activate the virtual environment and run the application using its backend entry point:
 
 ```bash
-python server.py
+python web/server.py
 ```
-
 If the server starts successfully, open the local URL printed in the terminal in your web browser.
-
-The exact startup command and local URL depend on the server configuration in `server.py`.
 
 ## Project Structure
 
@@ -171,4 +161,6 @@ This project is intended for educational and informational purposes. Its outputs
 
 ## License
 
-A license has not yet been specified. Add an appropriate `LICENSE` file before distributing the project under an open-source license.
+Unless otherwise stated, the original source code in this repository is protected by copyright. No permission is granted to copy, modify, redistribute, or use the code beyond the rights provided by applicable law.
+
+Third-party libraries, pretrained models, datasets, and other external materials remain subject to their respective licenses and terms.
