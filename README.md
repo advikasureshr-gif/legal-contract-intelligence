@@ -46,7 +46,7 @@ The application is intended to support preliminary contract review, not replace 
 
 ## Results
 
-Refer to src/Research_Readme.md for evaluation of the model (Confusion Matrix, Accuracy, Precision, ROC-AUC, and other parameters), and comparison with previously implemented models.
+Refer to [src/Research_Readme.md](src/Research_Readme.md) for evaluation of the model (Confusion Matrix, Accuracy, Precision, ROC-AUC, and other parameters), and comparison with previously implemented models.
 
 ## Installation
 
