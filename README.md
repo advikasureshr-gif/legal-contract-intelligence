@@ -44,6 +44,10 @@ The application is intended to support preliminary contract review, not replace 
 | Frontend | HTML, CSS, JavaScript |
 | Backend | Python |
 
+## Results
+
+Refer to src/Research_Readme.md for evaluation of the model (Confusion Matrix, Accuracy, Precision, ROC-AUC, and other parameters), and comparison with previously implemented models.
+
 ## Installation
 
 ### Prerequisites
